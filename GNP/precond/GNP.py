@@ -6,7 +6,7 @@ import os
 import numpy as np
 from tqdm import tqdm
 
-from GNP.solver import Arnoldi
+from GNP.solver import Arnoldi, Lanczos
 
     
 #-----------------------------------------------------------------------------
@@ -16,8 +16,8 @@ from GNP.solver import Arnoldi
 # device and cast to a lower precision for training.
 class StreamingDataset(IterableDataset):
 
-    # A is torch tensor, either sparse or full
-    def __init__(self, A, batch_size, training_data, m):
+    # Added use_lanczos flag
+    def __init__(self, A, batch_size, training_data, m, use_lanczos=False):
         super().__init__()
         self.n = A.shape[0]
         self.m = m
@@ -26,11 +26,23 @@ class StreamingDataset(IterableDataset):
 
         # Computations done in device
         if training_data == 'x_subspace' or training_data == 'x_mix':
-            arnoldi = Arnoldi()
-            Vm1, barHm = arnoldi.build(A, m=m)
-            W, S, Zh = torch.linalg.svd(barHm, full_matrices=False)
-            Q = ( Vm1[:,:-1] @ Zh.T ) / S.view(1, m)
-            self.Q = Q.to('cpu')
+            if use_lanczos:
+                # Use Lanczos for Symmetric/SPD problems
+                solver_gen = Lanczos()
+                Vm1, T = solver_gen.build(A, m=m)
+                # Eigendecomposition for symmetric tridiagonal T
+                # We work on the square part T[:m, :m]
+                evals, evecs = torch.linalg.eigh(T[:m, :m])
+                # Project back to full space: Q = V_m * eigenvectors
+                Q = Vm1[:, :m] @ evecs
+                self.Q = Q.to('cpu')
+            else:
+                # Default Arnoldi
+                arnoldi = Arnoldi()
+                Vm1, barHm = arnoldi.build(A, m=m)
+                W, S, Zh = torch.linalg.svd(barHm, full_matrices=False)
+                Q = ( Vm1[:,:-1] @ Zh.T ) / S.view(1, m)
+                self.Q = Q.to('cpu')
 
     def generate(self):
         while True:
@@ -75,14 +87,15 @@ class StreamingDataset(IterableDataset):
 # Graph neural preconditioner
 class GNP():
 
-    # A is torch tensor, either sparse or full
-    def __init__(self, A, training_data, m, net, device):
+    # Added use_lanczos flag to init
+    def __init__(self, A, training_data, m, net, device, use_lanczos=False):
         self.A = A
         self.training_data = training_data
         self.m = m
         self.net = net
         self.device = device
         self.dtype = net.dtype
+        self.use_lanczos = use_lanczos
 
     def train(self, batch_size, grad_accu_steps, epochs, optimizer,
               scheduler=None, num_workers=0, checkpoint_prefix_with_path=None,
@@ -90,8 +103,10 @@ class GNP():
 
         self.net.train()
         optimizer.zero_grad()
+        # Pass use_lanczos to dataset
         dataset = StreamingDataset(self.A, batch_size,
-                                   self.training_data, self.m)
+                                   self.training_data, self.m, 
+                                   use_lanczos=self.use_lanczos)
         loader = DataLoader(dataset, num_workers=num_workers, pin_memory=True)
         
         hist_loss = []
@@ -103,21 +118,18 @@ class GNP():
             pbar = tqdm(total=epochs, desc='Train')
 
         for epoch, x_or_b in enumerate(loader):
-
-            # Generate training data
+            # ... (training loop remains identical) ...
             if self.training_data != 'no_x':
                 x = x_or_b[0].to(self.device)
                 b = self.A @ x
                 b, x = b.to(self.dtype), x.to(self.dtype)
-            else: # self.training_data == 'no_x'
+            else:
                 b = x_or_b[0].to(self.device).to(self.dtype)
 
-            # Train
             x_out = self.net(b)
             b_out = (self.A @ x_out.to(torch.float64)).to(self.dtype)
             loss = F.l1_loss(b_out, b)
 
-            # Bookkeeping
             hist_loss.append(loss.item())
             if loss.item() < best_loss:
                 best_loss = loss.item()
@@ -126,7 +138,6 @@ class GNP():
                     checkpoint_file = checkpoint_prefix_with_path + 'best.pt'
                     torch.save(self.net.state_dict(), checkpoint_file)
 
-            # Train (cont.)
             loss.backward()
             if (epoch+1) % grad_accu_steps == 0 or epoch == epochs - 1:
                 optimizer.step()
@@ -134,14 +145,12 @@ class GNP():
                 if scheduler is not None:
                     scheduler.step()
 
-            # Bookkeeping (cont.)
             if progress_bar:
                 pbar.set_description(f'Train loss {loss:.1e}')
                 pbar.update()
             if epoch == epochs - 1:
                 break
 
-        # Bookkeeping (cont.)
         if checkpoint_file is not None:
             checkpoint_file_old = checkpoint_file
             checkpoint_file = \

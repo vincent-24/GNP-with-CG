@@ -30,7 +30,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from GNP.problems import *
-from GNP.solver import GMRES
+from GNP.solver import GMRES, FCG
 from GNP.precond import *
 from GNP.nn import ResGCN
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse
@@ -51,6 +51,9 @@ def main():
         '--problem', type=str, default='VanVelzen/std1_Jac3',
         help='group/name from SuiteSparse '
         '(default: VanVelzen/std1_Jac3)')
+    parser.add_argument(
+        '--solver', type=str, default='gmres', choices=['gmres', 'fcg'],
+        help='Solver type: gmres (default) or fcg (Flexible Conjugate Gradient)')
     parser.add_argument(
         '--out_path', type=str, default='./dump/',
         help='path of output figures (default: ./dump/)')
@@ -84,6 +87,7 @@ def main():
     save_model = True           # whether save model
     hide_solver_bar = False     # whether hide progress bar in linear solver
     hide_training_bar = False   # whether hide progress bar in GNP training
+    use_lanczos = True if args.solver == 'fcg' else False  # whether use Lanczos in training data generation
 
     # Computing device
     if torch.cuda.is_available():
@@ -93,6 +97,14 @@ def main():
 
     # Load problem
     A = load_suitesparse(args.location, args.problem, device)
+    if args.solver == 'fcg':
+        print("Verifying matrix symmetry...")
+        # Convert to COO for the check, as CSC subtraction is unstable in beta
+        A_coo = A.to_sparse_coo()
+        diff = (A_coo - A_coo.t()).coalesce()
+        if diff.values().abs().max() > 1e-5:
+            raise ValueError(f"Matrix {args.problem} is NOT symmetric. FCG requires symmetric matrices.")
+        print("Symmetry verified.")
 
     # Normalize A to avoid hassles
     A = scale_A_by_spectral_radius(A)
@@ -115,7 +127,12 @@ def main():
                                              args.out_file_prefix)
 
     # Solver
-    solver = GMRES()
+    if args.solver == 'fcg':
+        solver = FCG()
+        print(f'\nUsing Flexible Conjugate Gradient (FCG). Lanczos data generation enabled.')
+    else:
+        solver = GMRES()
+        print(f'\nUsing GMRES. Arnoldi data generation enabled.')
 
     # GMRES without preconditioner
     print('\nSolving linear system without preconditioner ...')
@@ -134,7 +151,7 @@ def main():
     optimizer = torch.optim.Adam(net.parameters(), lr=lr,
                                  weight_decay=weight_decay)
     scheduler = None
-    M = GNP(A, training_data, m, net, device)
+    M = GNP(A, training_data, m, net, device, use_lanczos=use_lanczos)
     tic = time.time()
     hist_loss, best_loss, best_epoch, model_file = M.train(
         batch_size, grad_accu_steps, epochs, optimizer, scheduler,
