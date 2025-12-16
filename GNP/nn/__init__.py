@@ -1,1 +1,1 @@
-from .ResGCN import *
+from .ResGCN import ResGCN, SplitResGCN
