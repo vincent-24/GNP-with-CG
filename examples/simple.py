@@ -3,42 +3,57 @@ import time
 import torch
 import argparse
 import warnings
+import random
+import shutil
+from datetime import datetime
 from pathlib import Path
 import matplotlib.pyplot as plt
 
 from GNP.problems import *
 from GNP.solver import GMRES, FCG 
 from GNP.precond import *
-# Ensure these imports are correct based on your previous fixes
 from GNP.nn import ResGCN, SplitResGCN
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse
 
+def get_timestamp_dir(base_dump_path):
+    """Creates a directory based on today's date (MM-DD-YYYY)."""
+    date_str = datetime.now().strftime("%m-%d-%Y")
+    path = os.path.join(base_dump_path, date_str)
+    Path(path).mkdir(parents=True, exist_ok=True)
+    return path
+
+def generate_run_id():
+    return str(random.randint(10000, 99999))
+
+def resolve_checkpoint_path(dump_root, filename):
+    """
+    Resolves the full path of a checkpoint. 
+    Assumes filename is in dump_root if not an absolute path.
+    """
+    if os.path.isabs(filename):
+        return filename
+    return os.path.join(dump_root, filename)
+
 def main():
-    parser = argparse.ArgumentParser(description='Compare FCG and FGMRES with Caching')
+    parser = argparse.ArgumentParser(description='Compare FCG and FGMRES with Checkpoint Management')
     parser.add_argument('--location', type=str, default='~/data/SuiteSparse/ssget/mat')
     parser.add_argument('--problem', type=str, default='HB/bcsstk17') 
-    parser.add_argument('--out_path', type=str, default='./dump/')
+    parser.add_argument('--dump_root', type=str, default='./dump/', help='Root directory for checkpoints')
     parser.add_argument('--num_workers', type=int, default=0)
-    parser.add_argument('--force_retrain', action='store_true', help='Ignore saved models and retrain')
+    parser.add_argument('--fcg-ckpt', type=str, default=None, help='ckpt.pt')
+    parser.add_argument('--fgmres-ckpt', type=str, default=None, help='ckpt.pt')
     args = parser.parse_args()
 
-    # --- SETUP ---
-    configs = [
-        {'name': 'FGMRES', 'solver_cls': GMRES, 'use_lanczos': False, 'net_cls': ResGCN},
-        {'name': 'FCG',    'solver_cls': FCG,   'use_lanczos': True,  'net_cls': SplitResGCN}
-    ]
+    # directory setup
+    args.dump_root = os.path.abspath(os.path.expanduser(args.dump_root))
+    Path(args.dump_root).mkdir(parents=True, exist_ok=True)
+    plot_dir = get_timestamp_dir(args.dump_root)
+    print(f"plots will be saved to: {plot_dir}")
+    print(f"checkpoints will be saved/loaded from: {args.dump_root}")
 
-    restart = 5 
-    max_iters = 100
-    m = 40
-    batch_size = 16
-    epochs = 2000
-    lr = 5e-4
-    
+    # problem setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # Load & Normalize Matrix
-    print(f'Loading {args.problem}...')
+    print(f'\nLoading {args.problem}...')
     try:
         A = load_suitesparse(args.location, args.problem, device)
     except Exception:
@@ -52,59 +67,108 @@ def main():
     x_gt = gen_x_all_ones(n).to(device)
     b = A @ x_gt
     
-    args.out_path = os.path.abspath(os.path.expanduser(args.out_path))
-    Path(args.out_path).mkdir(parents=True, exist_ok=True)
-    # Base prefix for the problem
-    base_prefix = os.path.join(args.out_path, f"{args.problem.replace('/', '_')}")
+    params = {
+        'restart': 10,
+        'max_iters': 100,
+        'm': 40,
+        'batch_size': 16,
+        'epochs': 2000,
+        'lr': 1e-3
+    }
+
+    configs = [
+        {
+            'name': 'FGMRES', 
+            'solver_cls': GMRES, 
+            'use_lanczos': False, 
+            'net_cls': ResGCN,
+            'user_ckpt': args.fgmres_ckpt
+        },
+        {
+            'name': 'FCG',    
+            'solver_cls': FCG,   
+            'use_lanczos': True,  
+            'net_cls': SplitResGCN,
+            'user_ckpt': args.fcg_ckpt
+        }
+    ]
 
     results = {}
+    run_ids = {} 
 
-    # --- MAIN LOOP ---
+    # main loop
     for config in configs:
         name = config['name']
         print(f"\n{'='*40}")
         print(f"Configuration: {name}")
         print(f"{'='*40}")
 
-        # 1. Baseline Solve (No Precond) - Always run (fast)
+        # no precond
         solver = config['solver_cls']()
         print(f"Solving {name} (No Preconditioner)...")
-        _, _, _, no_pre_res, no_pre_time = solver.solve(
-            A, b, M=None, restart=restart, max_iters=max_iters, progress_bar=True
-        )
+        solve_kwargs = {
+            'restart': params['restart'], 
+            'max_iters': params['max_iters'], 
+            'progress_bar': True
+        }
+        # truncation for FCG
+        if name == 'FCG': solve_kwargs['truncation_k'] = 5
 
-        # 2. Prepare Preconditioner
+        _, _, _, no_pre_res, no_pre_time = solver.solve(A, b, M=None, **solve_kwargs)
+
+        # prep precond load/train
         print(f"Preparing {name} Preconditioner ({config['net_cls'].__name__})...")
         net = config['net_cls'](A, num_layers=8, embed=16, hidden=32, drop_rate=0.0).to(device)
-        optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(net.parameters(), lr=params['lr'])
         
-        # Define Checkpoint Path
-        # e.g., dump/HB_bcsstk17_FGMRES_best.pt
-        model_prefix = f"{base_prefix}_{name}_"
-        model_path = f"{model_prefix}best.pt"
-        
-        M = GNP(A, 'x_mix', m, net, device, use_lanczos=config['use_lanczos'])
+        M = GNP(A, 'x_mix', params['m'], net, device, use_lanczos=config['use_lanczos'])
 
-        # CHECK FOR CACHED MODEL
-        if os.path.exists(model_path) and not args.force_retrain:
-            print(f"Found cached model: {model_path}")
-            print("Loading weights and skipping training...")
-            net.load_state_dict(torch.load(model_path, map_location=device))
-            hist_loss = [] # Loss history is lost, but that's fine for solver comparison
+        # checkpoint logic
+        if config['user_ckpt']:
+            # load user checkpoint
+            ckpt_path = resolve_checkpoint_path(args.dump_root, config['user_ckpt'])
+            if not os.path.exists(ckpt_path):
+                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+            
+            print(f"Loading checkpoint: {config['user_ckpt']}")
+            net.load_state_dict(torch.load(ckpt_path, map_location=device))
+            
+            try:
+                run_id = Path(config['user_ckpt']).stem.split('_')[-1]
+            except:
+                run_id = "loaded"
+            run_ids[name] = run_id
+            hist_loss = []
+            
         else:
-            print(f"No cached model found (or forced retrain). Training...")
-            hist_loss, _, _, _ = M.train(
-                batch_size, 1, epochs, optimizer, num_workers=args.num_workers, 
-                checkpoint_prefix_with_path=model_prefix, # Save for next time
+            # train without checkpoint
+            run_id = generate_run_id()
+            run_ids[name] = run_id
+            
+            clean_problem_name = args.problem.replace('/', '_')
+            ckpt_filename = f"{clean_problem_name}_{name}_{run_id}.pt"
+            ckpt_path = os.path.join(args.dump_root, ckpt_filename)
+            
+            temp_prefix = os.path.join(args.dump_root, f"TEMP_{name}_{run_id}_")
+            
+            print(f"Training new model (Run ID: {run_id})...")
+            hist_loss, _, _, trained_file = M.train(
+                params['batch_size'], 1, params['epochs'], optimizer, 
+                num_workers=args.num_workers, 
+                checkpoint_prefix_with_path=temp_prefix,
                 progress_bar=True
             )
+            
+            if trained_file and os.path.exists(trained_file):
+                print(f"Saving checkpoint to: {ckpt_filename}")
+                os.rename(trained_file, ckpt_path)
+            else:
+                print("Warning: No checkpoint file returned from training.")
 
-        # 3. Solve with Preconditioner
+        # solve with precond
         print(f"Solving {name} (With GNP)...")
         try:
-            _, _, _, gnp_res, gnp_time = solver.solve(
-                A, b, M=M, restart=restart, max_iters=max_iters, progress_bar=True
-            )
+            _, _, _, gnp_res, gnp_time = solver.solve(A, b, M=M, **solve_kwargs)
         except Exception as e:
             print(f"Solver failed: {e}")
             gnp_res = []
@@ -118,34 +182,42 @@ def main():
             'train_loss': hist_loss
         }
 
-    # --- PLOTTING ---
+    # plotting
     print("\nGenerating Comparison Plots...")
+    
+    suffix = f"_fcg{run_ids.get('FCG', 'nan')}_fgmres{run_ids.get('FGMRES', 'nan')}"
+    base_prefix = os.path.join(plot_dir, f"{args.problem.replace('/', '_')}_comparison")
+    
+    # convergence plot
     plt.figure(figsize=(10, 6))
     for name, res in results.items():
         if len(res['gnp_res']) > 0:
-            plt.semilogy(res['gnp_res'], linewidth=2, label=f'{name} (GNP)')
+            plt.semilogy(res['gnp_res'], linewidth=2, label=f'{name} (GNP) #{run_ids[name]}')
         plt.semilogy(res['no_pre_res'], linestyle='--', alpha=0.5, label=f'{name} (No Precond)')
             
-    plt.title(f'{args.problem}: Solver Convergence Comparison')
+    plt.title(f'Convergence Comparison ({args.problem})')
     plt.xlabel('Iterations')
     plt.ylabel('Relative Residual')
     plt.legend()
     plt.grid(True, which='both', linestyle='--', alpha=0.3)
-    plt.savefig(f"{base_prefix}_comparison_iters.png")
-    print(f"Saved {base_prefix}_comparison_iters.png")
+    out_file = f"{base_prefix}_iters{suffix}.png"
+    plt.savefig(out_file)
+    print(f"Saved plot: {out_file}")
 
+    # time plot
     plt.figure(figsize=(10, 6))
     for name, res in results.items():
         if len(res['gnp_res']) > 0:
-            plt.semilogy(res['gnp_time'], res['gnp_res'], linewidth=2, label=f'{name} (GNP)')
+            plt.semilogy(res['gnp_time'], res['gnp_res'], linewidth=2, label=f'{name} (GNP) #{run_ids[name]}')
             
-    plt.title(f'{args.problem}: Time-to-Solution Comparison')
+    plt.title(f'Time-to-Solution Comparison ({args.problem})')
     plt.xlabel('Time (s)')
     plt.ylabel('Relative Residual')
     plt.legend()
     plt.grid(True, which='both', linestyle='--', alpha=0.3)
-    plt.savefig(f"{base_prefix}_comparison_time.png")
-    print(f"Saved {base_prefix}_comparison_time.png")
+    out_file = f"{base_prefix}_time{suffix}.png"
+    plt.savefig(out_file)
+    print(f"Saved plot: {out_file}")
 
 if __name__ == '__main__':
     main()

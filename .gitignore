@@ -1,5 +1,7 @@
 .DS_Store
 build
-*.egg-info
+**/*.egg-info/
 examples/dump/*
 data/*
+**/__pycache__/
+GNP/solver/temp.py

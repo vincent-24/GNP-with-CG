@@ -129,13 +129,13 @@ class SplitResGCN(nn.Module):
         # Encoder (approximates L^T)
         self.enc_mlp = MLP(1, embed, 2, hidden, drop_rate)
         self.enc_gconv = nn.ModuleList()
-        self.enc_skip = nn.ModuleList()   # ADDED SKIP
+        self.enc_skip = nn.ModuleList()   
         self.enc_bn = nn.ModuleList()
         
         # Decoder (approximates L)
         self.dec_mlp = MLP(embed, 1, 2, hidden, drop_rate, is_output_layer=True)
         self.dec_gconv = nn.ModuleList()
-        self.dec_skip = nn.ModuleList()   # ADDED SKIP
+        self.dec_skip = nn.ModuleList()   
         self.dec_bn = nn.ModuleList()
         
         self.half_layers = num_layers // 2
@@ -143,12 +143,12 @@ class SplitResGCN(nn.Module):
         for i in range(self.half_layers):
             # Encoder Layers
             self.enc_gconv.append(GCNConv(self.AA, embed, embed))
-            self.enc_skip.append(nn.Linear(embed, embed)) # ADDED SKIP
+            self.enc_skip.append(nn.Linear(embed, embed)) 
             self.enc_bn.append(nn.BatchNorm1d(embed))
             
             # Decoder Layers
             self.dec_gconv.append(GCNConv(self.AA, embed, embed))
-            self.dec_skip.append(nn.Linear(embed, embed)) # ADDED SKIP
+            self.dec_skip.append(nn.Linear(embed, embed)) 
             self.dec_bn.append(nn.BatchNorm1d(embed))
             
         self.dropout = nn.Dropout(drop_rate)
@@ -168,7 +168,7 @@ class SplitResGCN(nn.Module):
             # Apply GCN + Residual Skip
             R_conv = self.enc_gconv[i](R)
             R_skip = self.enc_skip[i](R)
-            R = R_conv + R_skip         # THE FIX
+            R = R_conv + R_skip         
             
             R = R.view(n * batch_size, -1)
             R = self.enc_bn[i](R)
@@ -180,7 +180,7 @@ class SplitResGCN(nn.Module):
             # Apply GCN + Residual Skip
             R_conv = self.dec_gconv[i](R)
             R_skip = self.dec_skip[i](R)
-            R = R_conv + R_skip         # THE FIX
+            R = R_conv + R_skip         
 
             R = R.view(n * batch_size, -1)
             R = self.dec_bn[i](R)
