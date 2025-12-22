@@ -14,6 +14,7 @@ from GNP.solver import GMRES, FCG
 from GNP.precond import *
 from GNP.nn import ResGCN, SplitResGCN
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse
+from GNP import config
 
 def get_timestamp_dir(base_dump_path):
     """Creates a directory based on today's date (MM-DD-YYYY)."""
@@ -66,15 +67,6 @@ def main():
 
     x_gt = gen_x_all_ones(n).to(device)
     b = A @ x_gt
-    
-    params = {
-        'restart': 10,
-        'max_iters': 100,
-        'm': 40,
-        'batch_size': 16,
-        'epochs': 2000,
-        'lr': 1e-3
-    }
 
     configs = [
         {
@@ -97,51 +89,60 @@ def main():
     run_ids = {} 
 
     # main loop
-    for config in configs:
-        name = config['name']
+    for config_item in configs:
+        name = config_item['name']
         print(f"\n{'='*40}")
         print(f"Configuration: {name}")
         print(f"{'='*40}")
 
+        # 1. Select correct 'm' (subspace size) based on solver type
+        # FCG uses LANCZOS_M (80), FGMRES uses ARNOLDI_M (40)
+        current_m = config.LANCZOS_M if config_item['use_lanczos'] else config.ARNOLDI_M
+        print(f"Using Krylov subspace size m={current_m}")
+
         # no precond
-        solver = config['solver_cls']()
+        solver = config_item['solver_cls']()
         print(f"Solving {name} (No Preconditioner)...")
+        
+        # 2. Use config variables for solver kwargs
         solve_kwargs = {
-            'restart': params['restart'], 
-            'max_iters': params['max_iters'], 
+            'restart': config.RESTART, 
+            'max_iters': config.MAX_ITERS, 
             'progress_bar': True
         }
-        # truncation for FCG
-        if name == 'FCG': solve_kwargs['truncation_k'] = 5
+        # Add truncation for FCG from config
+        if name == 'FCG': 
+            solve_kwargs['truncation_k'] = config.TRUNCATION_K
 
         _, _, _, no_pre_res, no_pre_time = solver.solve(A, b, M=None, **solve_kwargs)
 
         # prep precond load/train
-        print(f"Preparing {name} Preconditioner ({config['net_cls'].__name__})...")
-        net = config['net_cls'](A, num_layers=8, embed=16, hidden=32, drop_rate=0.0).to(device)
-        optimizer = torch.optim.Adam(net.parameters(), lr=params['lr'])
+        print(f"Preparing {name} Preconditioner ({config_item['net_cls'].__name__})...")
+        net = config_item['net_cls'](A, num_layers=8, embed=16, hidden=32, drop_rate=0.0).to(device)
+        optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE)
         
-        M = GNP(A, 'x_mix', params['m'], net, device, use_lanczos=config['use_lanczos'])
+        # Initialize GNP with the correct 'current_m'
+        M = GNP(A, 'x_mix', current_m, net, device, use_lanczos=config_item['use_lanczos'])
 
         # checkpoint logic
-        if config['user_ckpt']:
+        if config_item['user_ckpt'] and not args.force_retrain:
             # load user checkpoint
-            ckpt_path = resolve_checkpoint_path(args.dump_root, config['user_ckpt'])
+            ckpt_path = resolve_checkpoint_path(args.dump_root, config_item['user_ckpt'])
             if not os.path.exists(ckpt_path):
                 raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
             
-            print(f"Loading checkpoint: {config['user_ckpt']}")
+            print(f"Loading checkpoint: {config_item['user_ckpt']}")
             net.load_state_dict(torch.load(ckpt_path, map_location=device))
             
             try:
-                run_id = Path(config['user_ckpt']).stem.split('_')[-1]
+                run_id = Path(config_item['user_ckpt']).stem.split('_')[-1]
             except:
                 run_id = "loaded"
             run_ids[name] = run_id
             hist_loss = []
             
         else:
-            # train without checkpoint
+            # train without checkpoint (or forced retrain)
             run_id = generate_run_id()
             run_ids[name] = run_id
             
@@ -152,8 +153,9 @@ def main():
             temp_prefix = os.path.join(args.dump_root, f"TEMP_{name}_{run_id}_")
             
             print(f"Training new model (Run ID: {run_id})...")
+            # 3. Use config variables for training
             hist_loss, _, _, trained_file = M.train(
-                params['batch_size'], 1, params['epochs'], optimizer, 
+                config.BATCH_SIZE, 1, config.EPOCHS, optimizer, 
                 num_workers=args.num_workers, 
                 checkpoint_prefix_with_path=temp_prefix,
                 progress_bar=True

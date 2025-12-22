@@ -1,2 +1,2 @@
-from . import problems, utils
+from . import problems, utils, config
 
