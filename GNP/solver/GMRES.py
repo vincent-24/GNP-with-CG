@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from warnings import warn
+from GNP import config
 
 # Convention: M \approx inv(A)
 
@@ -126,7 +127,15 @@ class GMRES():
         if progress_bar:
             pbar.close()
 
-        return x, iters, hist_abs_res, hist_rel_res, hist_time
+        # Compute Euclidean orthogonality of Arnoldi basis vectors (if enabled)
+        ortho_map = None
+        if config.TRACK_ORTHOGONALITY:
+            # Extract only the active basis vectors from the final restart cycle
+            V_active = V[:, :j+2].detach().cpu()  # j+2 because V has j+1 vectors (0 to j) plus one extra
+            # Compute |V^T V| - should be identity matrix if perfectly orthogonal
+            ortho_map = torch.abs(V_active.T @ V_active).numpy()
+
+        return x, iters, hist_abs_res, hist_rel_res, hist_time, ortho_map
             
 
 #-----------------------------------------------------------------------------

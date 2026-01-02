@@ -1,225 +1,390 @@
 import os
 import time
 import torch
+import numpy as np
 import argparse
-import warnings
 import random
-import shutil
+import json
+import matplotlib.pyplot as plt
 from datetime import datetime
 from pathlib import Path
-import matplotlib.pyplot as plt
 
 from GNP.problems import *
-from GNP.solver import GMRES, FCG 
 from GNP.precond import *
-from GNP.nn import ResGCN, SplitResGCN
+from GNP.precond.ILU import ILU
+from GNP.precond.AMGPreconditioner import AMGPreconditioner
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse
 from GNP import config
+from GNP.factory import get_solver_and_network, get_network_class
+
+# utility functions
+def get_timestamp_str():
+    return datetime.now().strftime("%m-%d-%Y")
 
 def get_timestamp_dir(base_dump_path):
-    """Creates a directory based on today's date (MM-DD-YYYY)."""
-    date_str = datetime.now().strftime("%m-%d-%Y")
-    path = os.path.join(base_dump_path, date_str)
+    path = os.path.join(base_dump_path, get_timestamp_str())
     Path(path).mkdir(parents=True, exist_ok=True)
+    Path(os.path.join(path, 'configs')).mkdir(parents=True, exist_ok=True)
+    Path(os.path.join(path, 'checkpoints')).mkdir(parents=True, exist_ok=True)
     return path
 
 def generate_run_id():
     return str(random.randint(10000, 99999))
 
-def resolve_checkpoint_path(dump_root, filename):
-    """
-    Resolves the full path of a checkpoint. 
-    Assumes filename is in dump_root if not an absolute path.
-    """
-    if os.path.isabs(filename):
-        return filename
-    return os.path.join(dump_root, filename)
-
-def main():
-    parser = argparse.ArgumentParser(description='Compare FCG and FGMRES with Checkpoint Management')
-    parser.add_argument('--location', type=str, default='~/data/SuiteSparse/ssget/mat')
-    parser.add_argument('--problem', type=str, default='HB/bcsstk17') 
-    parser.add_argument('--dump_root', type=str, default='./dump/', help='Root directory for checkpoints')
-    parser.add_argument('--num_workers', type=int, default=0)
-    parser.add_argument('--fcg-ckpt', type=str, default=None, help='ckpt.pt')
-    parser.add_argument('--fgmres-ckpt', type=str, default=None, help='ckpt.pt')
-    args = parser.parse_args()
-
-    # directory setup
+# setup and loading functions
+def setup_experiment(args):
+    torch.manual_seed(config.SEED)
+    np.random.seed(config.SEED)
+    random.seed(config.SEED)
+    
     args.dump_root = os.path.abspath(os.path.expanduser(args.dump_root))
     Path(args.dump_root).mkdir(parents=True, exist_ok=True)
     plot_dir = get_timestamp_dir(args.dump_root)
-    print(f"plots will be saved to: {plot_dir}")
-    print(f"checkpoints will be saved/loaded from: {args.dump_root}")
+    print(f"Output directory: {plot_dir}")
+    
+    return plot_dir
 
-    # problem setup
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def load_problem(args, device):
+    """Load matrix A, scale it, generate b, and return (A, A_csc, b, x_gt)."""
     print(f'\nLoading {args.problem}...')
-    try:
-        A = load_suitesparse(args.location, args.problem, device)
-    except Exception:
-        print(f"Could not load {args.problem}, falling back to Synthetic SPD Laplacian.")
-        A = gen_1d_laplacian(1000).to(device)
-        
+    A = load_suitesparse(args.location, args.problem, device)
     A = scale_A_by_spectral_radius(A)
     n = A.shape[0]
     print(f'Matrix n={n}, nnz={A._nnz()}')
-
+    
+    # Create CSC version for classical preconditioners (ILU, AMG)
+    A_csc = None
+    if args.classical:
+        A_csc = A.to_sparse_csc()
+        print("Classical preconditioner comparison enabled (ILU, AMG)")
+    
     x_gt = gen_x_all_ones(n).to(device)
     b = A @ x_gt
+    
+    return A, A_csc, b, x_gt
 
-    configs = [
-        {
-            'name': 'FGMRES', 
-            'solver_cls': GMRES, 
-            'use_lanczos': False, 
-            'net_cls': ResGCN,
-            'user_ckpt': args.fgmres_ckpt
-        },
-        {
-            'name': 'FCG',    
-            'solver_cls': FCG,   
-            'use_lanczos': True,  
-            'net_cls': SplitResGCN,
-            'user_ckpt': args.fcg_ckpt
-        }
-    ]
+# --mode train
+def train_routine(args, A, selected_solvers, device, plot_dir):
+    """Handle the entire TRAIN MODE logic."""
+    print(f"\n{'='*50}")
+    print("MODE: TRAIN - Training master model")
+    print(f"{'='*50}")
+    
+    train_solver_name = selected_solvers[0]
+    solver_cls, net_cls, cfg = get_solver_and_network(train_solver_name)
+    
+    if args.network_override:
+        net_cls = get_network_class(args.network_override)
+        print(f"Network override: {args.network_override}")
+    
+    current_m = config.LANCZOS_M if cfg['use_lanczos'] else config.ARNOLDI_M
+    print(f"Training with solver config: {train_solver_name}")
+    print(f"Network: {net_cls.__name__}")
+    print(f"Krylov Size m={current_m} ({'Lanczos' if cfg['use_lanczos'] else 'Arnoldi'})")
+    
+    net_kwargs = {
+        'A': A, 
+        'num_layers': config.NUM_LAYERS, 
+        'embed': config.EMBED_DIM,
+        'hidden': config.HIDDEN_DIM, 
+        'drop_rate': config.DROP_RATE
+    }
 
+    if net_cls.__name__ == 'SplitResGCN':
+        net_kwargs['tie_weights'] = args.tie_weights
+
+    net = net_cls(**net_kwargs).to(device)
+    optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE)
+    M = GNP(A, 'x_mix', current_m, net, device, use_lanczos=cfg['use_lanczos'])
+    
+    # Training
+    run_id = generate_run_id()
+    temp_prefix = os.path.join(plot_dir, 'checkpoints', f"TEMP_master_{run_id}_")
+    
+    print(f"Training new model (Run ID: {run_id})...")
+    hist_loss, best_loss, best_epoch, trained_file = M.train(
+        config.BATCH_SIZE, 1, config.EPOCHS, optimizer, 
+        num_workers=args.num_workers, 
+        checkpoint_prefix_with_path=temp_prefix,
+        progress_bar=True
+    )
+    
+    # Save master checkpoint
+    if args.checkpoint_path:
+        master_ckpt_path = os.path.abspath(args.checkpoint_path)
+        Path(os.path.dirname(master_ckpt_path)).mkdir(parents=True, exist_ok=True)
+    else:
+        problem_name = args.problem.split('/')[-1]
+        ckpt_filename = f"master_{problem_name}.pt"
+        master_ckpt_path = os.path.join(plot_dir, 'checkpoints', ckpt_filename)
+    
+    torch.save(net.state_dict(), master_ckpt_path)
+    print(f"\nMaster checkpoint saved to {master_ckpt_path}")
+    
+    # Save config to configs/ directory
+    config_filename = os.path.basename(master_ckpt_path).replace('.pt', '_config.json')
+    config_path = os.path.join(plot_dir, 'configs', config_filename)
+    run_config = {
+        'problem': args.problem,
+        'train_solver': train_solver_name,
+        'network': net_cls.__name__,
+        'm': current_m,
+        'layers': config.NUM_LAYERS,
+        'embed': config.EMBED_DIM,
+        'hidden': config.HIDDEN_DIM,
+        'epochs': config.EPOCHS,
+        'batch_size': config.BATCH_SIZE,
+        'best_loss': best_loss,
+        'best_epoch': best_epoch,
+        'date': get_timestamp_str()
+    }
+    with open(config_path, 'w') as f:
+        json.dump(run_config, f, indent=4)
+    print(f"Config saved to {config_path}")
+    
+    if trained_file and os.path.exists(trained_file):
+        os.remove(trained_file)
+    
+    print("\nTraining complete.")
+
+# --mode eval
+def eval_routine(args, A, A_csc, b, selected_solvers, device, master_ckpt_path):
+    """Handle the entire EVAL MODE solver loop. Returns results dict."""
+    print(f"\n{'='*50}")
+    print("MODE: EVAL - Evaluating with master checkpoint")
+    print(f"{'='*50}")
+    print(f"Loading master checkpoint: {master_ckpt_path}")
+    print(f"Baseline solver for comparisons: {config.BASELINE_SOLVER}")
+    
     results = {}
-    run_ids = {} 
+    default_solve_kwargs = {
+        'rtol': 1e-6,
+        'max_iters': 1000,
+        'restart': 80
+    }
 
-    # main loop
-    for config_item in configs:
-        name = config_item['name']
+    for name in selected_solvers:
+        solver_cls, net_cls, cfg = get_solver_and_network(name)
+        
+        if args.network_override:
+            net_cls = get_network_class(args.network_override)
+
         print(f"\n{'='*40}")
         print(f"Configuration: {name}")
         print(f"{'='*40}")
+        current_m = config.LANCZOS_M if cfg['use_lanczos'] else config.ARNOLDI_M
+        print(f"Krylov Size m={current_m} ({'Lanczos' if cfg['use_lanczos'] else 'Arnoldi'})")
+        print(f"Network: {net_cls.__name__}")
+        solver = solver_cls()
 
-        # 1. Select correct 'm' (subspace size) based on solver type
-        # FCG uses LANCZOS_M (80), FGMRES uses ARNOLDI_M (40)
-        current_m = config.LANCZOS_M if config_item['use_lanczos'] else config.ARNOLDI_M
-        print(f"Using Krylov subspace size m={current_m}")
+        current_kwargs = default_solve_kwargs.copy()
+        if "FCG" in name or "CG" in name: 
+            current_kwargs.pop('restart', None)
 
-        # no precond
-        solver = config_item['solver_cls']()
-        print(f"Solving {name} (No Preconditioner)...")
-        
-        # 2. Use config variables for solver kwargs
-        solve_kwargs = {
-            'restart': config.RESTART, 
-            'max_iters': config.MAX_ITERS, 
-            'progress_bar': True
-        }
-        # Add truncation for FCG from config
-        if name == 'FCG': 
-            solve_kwargs['truncation_k'] = config.TRUNCATION_K
-
-        _, _, _, no_pre_res, no_pre_time = solver.solve(A, b, M=None, **solve_kwargs)
-
-        # prep precond load/train
-        print(f"Preparing {name} Preconditioner ({config_item['net_cls'].__name__})...")
-        net = config_item['net_cls'](A, num_layers=8, embed=16, hidden=32, drop_rate=0.0).to(device)
-        optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE)
-        
-        # Initialize GNP with the correct 'current_m'
-        M = GNP(A, 'x_mix', current_m, net, device, use_lanczos=config_item['use_lanczos'])
-
-        # checkpoint logic
-        if config_item['user_ckpt'] and not args.force_retrain:
-            # load user checkpoint
-            ckpt_path = resolve_checkpoint_path(args.dump_root, config_item['user_ckpt'])
-            if not os.path.exists(ckpt_path):
-                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-            
-            print(f"Loading checkpoint: {config_item['user_ckpt']}")
-            net.load_state_dict(torch.load(ckpt_path, map_location=device))
-            
-            try:
-                run_id = Path(config_item['user_ckpt']).stem.split('_')[-1]
-            except:
-                run_id = "loaded"
-            run_ids[name] = run_id
-            hist_loss = []
-            
-        else:
-            # train without checkpoint (or forced retrain)
-            run_id = generate_run_id()
-            run_ids[name] = run_id
-            
-            clean_problem_name = args.problem.replace('/', '_')
-            ckpt_filename = f"{clean_problem_name}_{name}_{run_id}.pt"
-            ckpt_path = os.path.join(args.dump_root, ckpt_filename)
-            
-            temp_prefix = os.path.join(args.dump_root, f"TEMP_{name}_{run_id}_")
-            
-            print(f"Training new model (Run ID: {run_id})...")
-            # 3. Use config variables for training
-            hist_loss, _, _, trained_file = M.train(
-                config.BATCH_SIZE, 1, config.EPOCHS, optimizer, 
-                num_workers=args.num_workers, 
-                checkpoint_prefix_with_path=temp_prefix,
-                progress_bar=True
-            )
-            
-            if trained_file and os.path.exists(trained_file):
-                print(f"Saving checkpoint to: {ckpt_filename}")
-                os.rename(trained_file, ckpt_path)
+        # --- Unpreconditioned Run (only for baseline solver) ---
+        no_pre_res, no_pre_time = [], []
+        if name == config.BASELINE_SOLVER:
+            print(f"Solving {name} (No Preconditioner)...")
+            result = solver.solve(A, b, M=None, **current_kwargs)
+            # Handle both 5 and 6 return values
+            if len(result) == 6:
+                _, _, _, no_pre_res, no_pre_time, _ = result
             else:
-                print("Warning: No checkpoint file returned from training.")
+                _, _, _, no_pre_res, no_pre_time = result
 
-        # solve with precond
+        # --- GNP Preconditioner Run ---
+        print(f"Preparing {name} Preconditioner ({net_cls.__name__})...")
+        net_kwargs = {
+            'A': A, 'num_layers': config.NUM_LAYERS, 'embed': config.EMBED_DIM,
+            'hidden': config.HIDDEN_DIM, 'drop_rate': config.DROP_RATE
+        }
+        if net_cls.__name__ == 'SplitResGCN':
+            net_kwargs['tie_weights'] = args.tie_weights
+        net = net_cls(**net_kwargs).to(device)
+        
+        print(f"Loading weights from master checkpoint...")
+        net.load_state_dict(torch.load(master_ckpt_path, map_location=device))
+        
+        M = GNP(A, 'x_mix', current_m, net, device, use_lanczos=cfg['use_lanczos'])
+
         print(f"Solving {name} (With GNP)...")
+        ortho_map = None
         try:
-            _, _, _, gnp_res, gnp_time = solver.solve(A, b, M=M, **solve_kwargs)
+            result = solver.solve(A, b, M=M, **current_kwargs)
+            # GMRES returns 5 values, CG-based solvers return 6 
+            if len(result) == 6:
+                _, _, _, gnp_res, gnp_time, ortho_map = result
+            else:
+                _, _, _, gnp_res, gnp_time = result
         except Exception as e:
             print(f"Solver failed: {e}")
-            gnp_res = []
-            gnp_time = []
+            gnp_res, gnp_time = [], []
+
+        # --- Classical Benchmarks (only for baseline solver) ---
+        ilu_res, ilu_time = [], []
+        amg_res, amg_time = [], []
+        
+        if args.classical and name == config.BASELINE_SOLVER:
+            # ILU Preconditioner
+            print(f"Solving {name} (With ILU)...")
+            try:
+                M_ilu = ILU(A_csc, ilu_factors_file=None, save_ilu_factors=False)
+                result = solver.solve(A, b, M=M_ilu, **current_kwargs)
+                if len(result) == 6:
+                    _, _, _, ilu_res, ilu_time, _ = result
+                else:
+                    _, _, _, ilu_res, ilu_time = result
+            except Exception as e:
+                print(f"ILU solver failed: {e}")
+                ilu_res, ilu_time = [], []
+            
+            # AMG Preconditioner
+            print(f"Solving {name} (With AMG)...")
+            try:
+                M_amg = AMGPreconditioner(A_csc)
+                result = solver.solve(A, b, M=M_amg, **current_kwargs)
+                if len(result) == 6:
+                    _, _, _, amg_res, amg_time, _ = result
+                else:
+                    _, _, _, amg_res, amg_time = result
+            except Exception as e:
+                print(f"AMG solver failed: {e}")
+                amg_res, amg_time = [], []
 
         results[name] = {
-            'no_pre_res': no_pre_res,
-            'no_pre_time': no_pre_time,
-            'gnp_res': gnp_res,
-            'gnp_time': gnp_time,
-            'train_loss': hist_loss
+            'no_pre_res': no_pre_res, 'no_pre_time': no_pre_time,
+            'gnp_res': gnp_res, 'gnp_time': gnp_time,
+            'ilu_res': ilu_res, 'ilu_time': ilu_time,
+            'amg_res': amg_res, 'amg_time': amg_time,
+            'ortho_map': ortho_map
         }
 
-    # plotting
+    return results
+
+def plot_results(results, args, plot_dir):
+    """Generate and save comparison plots."""
     print("\nGenerating Comparison Plots...")
     
-    suffix = f"_fcg{run_ids.get('FCG', 'nan')}_fgmres{run_ids.get('FGMRES', 'nan')}"
     base_prefix = os.path.join(plot_dir, f"{args.problem.replace('/', '_')}_comparison")
+    color_map = {name: plt.cm.tab10(i) for i, name in enumerate(results.keys())}
     
-    # convergence plot
-    plt.figure(figsize=(10, 6))
+    # --- 1. Convergence (Iterations) ---
+    plt.figure(figsize=(12, 6))
     for name, res in results.items():
+        color = color_map[name]
+        
         if len(res['gnp_res']) > 0:
-            plt.semilogy(res['gnp_res'], linewidth=2, label=f'{name} (GNP) #{run_ids[name]}')
-        plt.semilogy(res['no_pre_res'], linestyle='--', alpha=0.5, label=f'{name} (No Precond)')
-            
+            plt.semilogy(res['gnp_res'], linewidth=2, color=color, label=f'{name} (GNP)')
+        
+        # Only plot unpreconditioned/classical for baseline solver
+        if name == config.BASELINE_SOLVER:
+            if len(res['no_pre_res']) > 0:
+                plt.semilogy(res['no_pre_res'], linestyle='--', alpha=0.6, color=color, label=f'{name} (No Precond)')
+            if len(res.get('ilu_res', [])) > 0:
+                plt.semilogy(res['ilu_res'], linestyle='-.', linewidth=1.5, color=color, label=f'{name} (ILU)')
+            if len(res.get('amg_res', [])) > 0:
+                plt.semilogy(res['amg_res'], linestyle=':', linewidth=2, color=color, label=f'{name} (AMG)')
+    
     plt.title(f'Convergence Comparison ({args.problem})')
     plt.xlabel('Iterations')
     plt.ylabel('Relative Residual')
-    plt.legend()
+    plt.xlim(0, config.MAX_ITERS)
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.grid(True, which='both', linestyle='--', alpha=0.3)
-    out_file = f"{base_prefix}_iters{suffix}.png"
-    plt.savefig(out_file)
-    print(f"Saved plot: {out_file}")
-
-    # time plot
-    plt.figure(figsize=(10, 6))
+    plt.tight_layout()
+    plt.savefig(f"{base_prefix}_iters.png", bbox_inches='tight')
+    
+    # --- 2. Time-to-Solution ---
+    plt.figure(figsize=(12, 6))
     for name, res in results.items():
+        color = color_map[name]
+        
+        # Always plot GNP
         if len(res['gnp_res']) > 0:
-            plt.semilogy(res['gnp_time'], res['gnp_res'], linewidth=2, label=f'{name} (GNP) #{run_ids[name]}')
-            
+            plt.semilogy(res['gnp_time'], res['gnp_res'], linewidth=2, color=color, label=f'{name} (GNP)')
+        
+        # Only plot classical for baseline solver
+        if name == config.BASELINE_SOLVER:
+            if len(res.get('ilu_res', [])) > 0:
+                plt.semilogy(res['ilu_time'], res['ilu_res'], linestyle='-.', linewidth=1.5, color=color, label=f'{name} (ILU)')
+            if len(res.get('amg_res', [])) > 0:
+                plt.semilogy(res['amg_time'], res['amg_res'], linestyle=':', linewidth=2, color=color, label=f'{name} (AMG)')
+    
     plt.title(f'Time-to-Solution Comparison ({args.problem})')
     plt.xlabel('Time (s)')
     plt.ylabel('Relative Residual')
-    plt.legend()
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.grid(True, which='both', linestyle='--', alpha=0.3)
-    out_file = f"{base_prefix}_time{suffix}.png"
-    plt.savefig(out_file)
-    print(f"Saved plot: {out_file}")
+    plt.tight_layout()
+    plt.savefig(f"{base_prefix}_time.png", bbox_inches='tight')
+    
+    # --- 3. Orthogonality Heatmaps ---
+    for name, res in results.items():
+        ortho_map = res.get('ortho_map')
+        if ortho_map is not None:
+            plt.figure(figsize=(8, 6))
+            im = plt.imshow(ortho_map, cmap='hot', interpolation='nearest', vmin=0, vmax=1)
+            plt.colorbar(im)
+            
+            if 'GMRES' in name or 'FGMRES' in name:
+                plt.title(r"Euclidean Orthogonality: $|v_i^T v_j|$ - " + name)
+            else:
+                plt.title(r"A-Orthogonality: $|d_i^T A d_j|$ - " + name)
+            
+            plt.xlabel(r"Iteration $j$")
+            plt.ylabel(r"Iteration $i$")
+            plt.tight_layout()
+            filename = f"{args.problem.replace('/', '_')}_{name}_heatmap.png"
+            plt.savefig(os.path.join(plot_dir, filename), bbox_inches='tight')
+            print(f"Heatmap saved: {filename}")
+    
+    print(f"Plots saved to {base_prefix}_*.png")
+
+def main():
+    parser = argparse.ArgumentParser(description='GNP Solver Comparison')
+    available_solvers = list(config.SOLVER_REGISTRY.keys())
+    parser.add_argument('--solvers', nargs='+', default=config.SOLVERS, help=f'Solvers to run: {available_solvers} or "all"')
+    parser.add_argument('--location', type=str, default=config.SUITE_SPARSE_PATH)
+    parser.add_argument('--problem', type=str, default=config.PROBLEM_PATH) 
+    parser.add_argument('--dump_root', type=str, default=config.DEFAULT_DUMP_PATH)
+    parser.add_argument('--num_workers', type=int, default=config.NUM_WORKERS)
+    parser.add_argument('--mode', type=str, choices=['train', 'eval'], default=config.MODE)
+    parser.add_argument('--network-override', type=str, default=config.NETWORK_OVERRIDE)
+    parser.add_argument('--checkpoint-path', type=str, default=None)
+    parser.add_argument('--tie-weights', action='store_true', dest='tie_weights', default=config.TIE_WEIGHTS, help='Use weight tying in SplitResGCN')
+    parser.add_argument('--classical', action='store_true', default=config.CLASSICAL, help='Compare against ILU and AMG preconditioners')
+    args = parser.parse_args()
+    
+    if 'all' in args.solvers:
+        selected_solvers = available_solvers
+    else:
+        selected_solvers = args.solvers
+    
+    for s in selected_solvers:
+        if s not in config.SOLVER_REGISTRY:
+            raise ValueError(f"Solver '{s}' not found in registry.")
+    
+    print(f"Running in {args.mode.upper()} mode. Network: {args.network_override}, Tie Weights: {args.tie_weights}")
+    
+    plot_dir = setup_experiment(args)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    A, A_csc, b, x_gt = load_problem(args, device)
+    
+    if args.mode == 'train':
+        train_routine(args, A, selected_solvers, device, plot_dir)
+    else:
+        if args.checkpoint_path is None:
+            raise ValueError("--checkpoint-path is required in eval mode.")
+        
+        master_ckpt_path = os.path.abspath(args.checkpoint_path)
+
+        if not os.path.exists(master_ckpt_path):
+            raise FileNotFoundError(f"Checkpoint not found: {master_ckpt_path}")
+        
+        results = eval_routine(args, A, A_csc, b, selected_solvers, device, master_ckpt_path)
+        plot_results(results, args, plot_dir)
+    
+    print("\nDone.")
 
 if __name__ == '__main__':
     main()

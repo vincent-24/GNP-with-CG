@@ -1,0 +1,14 @@
+{
+    "problem": "HB/bcsstk17",
+    "train_solver": "FGMRES",
+    "network": "SplitResGCN",
+    "m": 80,
+    "layers": 8,
+    "embed": 16,
+    "hidden": 32,
+    "epochs": 2000,
+    "batch_size": 16,
+    "best_loss": 0.0063526444137096405,
+    "best_epoch": 1662,
+    "date": "12-27-2025"
+}
