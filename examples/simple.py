@@ -16,8 +16,9 @@ from GNP.precond.AMGPreconditioner import AMGPreconditioner
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse
 from GNP import config
 from GNP.factory import get_solver_and_network, get_network_class
+from GNP.solver import PCG
+from tqdm import tqdm
 
-# utility functions
 def get_timestamp_str():
     return datetime.now().strftime("%m-%d-%Y")
 
@@ -31,7 +32,78 @@ def get_timestamp_dir(base_dump_path):
 def generate_run_id():
     return str(random.randint(10000, 99999))
 
-# setup and loading functions
+def harvest_pcg_dataset(A, problem, output_path, device, num_runs=50, max_iters=200, rtol=1e-10):
+    """
+    Harvest PCG trajectories for offline training.
+    
+    Runs unpreconditioned PCG on synthetic problems where we know the solution,
+    collecting (residual, error) pairs at each iteration.
+    
+    Args:
+        A: System matrix (sparse, already scaled)
+        problem: Problem name string (for metadata)
+        output_path: Where to save the dataset
+        device: torch device
+        num_runs: Number of random PCG runs
+        max_iters: Max iterations per run
+        rtol: Convergence tolerance
+        
+    Returns:
+        output_path: Path to saved dataset
+    """
+    n = A.shape[0]
+    solver = PCG()
+    
+    all_residuals = []
+    all_errors = []
+    total_samples = 0
+    
+    print(f"Harvesting from {num_runs} random problems (max {max_iters} iters each)...")
+    
+    for run_idx in tqdm(range(num_runs), desc="Harvesting"):
+        x_true = gen_x_randn(n).to(device)
+        
+        with torch.no_grad():
+            b = A @ x_true
+            
+            # Run PCG with trajectory harvesting (no preconditioner)
+            _, _, _, _, _, _, trajectory = solver.solve(A, b, progress_bar=False, return_trajectory=True)
+            
+            history_r, history_x = trajectory
+            
+            for r_i, x_i in zip(history_r, history_x):
+                e_i = x_true - x_i
+                all_residuals.append(r_i.cpu())
+                all_errors.append(e_i.cpu())
+            
+            total_samples += len(history_r)
+    
+    dataset_r = torch.stack(all_residuals, dim=0)
+    dataset_e = torch.stack(all_errors, dim=0)
+    
+    print(f"Total samples collected: {total_samples}")
+    print(f"Dataset shape: {dataset_r.shape}")
+    
+    dataset = {
+        'r': dataset_r,
+        'e': dataset_e,
+        'metadata': {
+            'problem': problem,
+            'n': n,
+            'num_runs': num_runs,
+            'max_iters': max_iters,
+            'rtol': rtol,
+            'total_samples': total_samples,
+            'seed': config.SEED
+        }
+    }
+    
+    torch.save(dataset, output_path)
+    print(f"Dataset saved to: {output_path}")
+    print(f"File size: {os.path.getsize(output_path) / (1024*1024):.2f} MB")
+    
+    return output_path
+
 def setup_experiment(args):
     torch.manual_seed(config.SEED)
     np.random.seed(config.SEED)
@@ -52,7 +124,6 @@ def load_problem(args, device):
     n = A.shape[0]
     print(f'Matrix n={n}, nnz={A._nnz()}')
     
-    # Create CSC version for classical preconditioners (ILU, AMG)
     A_csc = None
     if args.classical:
         A_csc = A.to_sparse_csc()
@@ -97,19 +168,41 @@ def train_routine(args, A, selected_solvers, device, plot_dir):
     optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE)
     M = GNP(A, 'x_mix', current_m, net, device, use_lanczos=cfg['use_lanczos'])
     
-    # Training
     run_id = generate_run_id()
     temp_prefix = os.path.join(plot_dir, 'checkpoints', f"TEMP_master_{run_id}_")
     
-    print(f"Training new model (Run ID: {run_id})...")
+    dataset_path = None
+    if config.TRAIN_OFFLINE:
+        problem_name = args.problem.split('/')[-1]
+        dataset_filename = f"pcg_harvested_{problem_name}.pt"
+        dataset_dir = os.path.abspath(config.OFFLINE_DATASET_DIR)
+        Path(dataset_dir).mkdir(parents=True, exist_ok=True)
+        dataset_path = os.path.join(dataset_dir, dataset_filename)
+        
+        if not os.path.exists(dataset_path):
+            print(f"\n{'='*50}")
+            print("AUTO-HARVESTING: Dataset not found, generating...")
+            print(f"{'='*50}")
+            dataset_path = harvest_pcg_dataset(
+                A, args.problem, dataset_path, device,
+                num_runs=config.HARVEST_NUM_RUNS,
+                max_iters=config.HARVEST_MAX_ITERS,
+                rtol=config.HARVEST_RTOL
+            )
+        
+        print(f"Training new model (Run ID: {run_id}) [OFFLINE MODE]...")
+        print(f"  Dataset: {dataset_path}")
+    else:
+        print(f"Training new model (Run ID: {run_id}) [STREAMING MODE]...")
+    
     hist_loss, best_loss, best_epoch, trained_file = M.train(
         config.BATCH_SIZE, 1, config.EPOCHS, optimizer, 
         num_workers=args.num_workers, 
         checkpoint_prefix_with_path=temp_prefix,
-        progress_bar=True
+        progress_bar=True,
+        dataset_path=dataset_path
     )
     
-    # Save master checkpoint
     if args.checkpoint_path:
         master_ckpt_path = os.path.abspath(args.checkpoint_path)
         Path(os.path.dirname(master_ckpt_path)).mkdir(parents=True, exist_ok=True)
@@ -121,7 +214,6 @@ def train_routine(args, A, selected_solvers, device, plot_dir):
     torch.save(net.state_dict(), master_ckpt_path)
     print(f"\nMaster checkpoint saved to {master_ckpt_path}")
     
-    # Save config to configs/ directory
     config_filename = os.path.basename(master_ckpt_path).replace('.pt', '_config.json')
     config_path = os.path.join(plot_dir, 'configs', config_filename)
     run_config = {
@@ -195,8 +287,11 @@ def eval_routine(args, A, A_csc, b, selected_solvers, device, master_ckpt_path):
         # --- GNP Preconditioner Run ---
         print(f"Preparing {name} Preconditioner ({net_cls.__name__})...")
         net_kwargs = {
-            'A': A, 'num_layers': config.NUM_LAYERS, 'embed': config.EMBED_DIM,
-            'hidden': config.HIDDEN_DIM, 'drop_rate': config.DROP_RATE
+            'A': A, 
+            'num_layers': config.NUM_LAYERS, 
+            'embed': config.EMBED_DIM,
+            'hidden': config.HIDDEN_DIM, 
+            'drop_rate': config.DROP_RATE
         }
         if net_cls.__name__ == 'SplitResGCN':
             net_kwargs['tie_weights'] = args.tie_weights
@@ -225,7 +320,6 @@ def eval_routine(args, A, A_csc, b, selected_solvers, device, master_ckpt_path):
         amg_res, amg_time = [], []
         
         if args.classical and name == config.BASELINE_SOLVER:
-            # ILU Preconditioner
             print(f"Solving {name} (With ILU)...")
             try:
                 M_ilu = ILU(A_csc, ilu_factors_file=None, save_ilu_factors=False)
@@ -238,7 +332,6 @@ def eval_routine(args, A, A_csc, b, selected_solvers, device, master_ckpt_path):
                 print(f"ILU solver failed: {e}")
                 ilu_res, ilu_time = [], []
             
-            # AMG Preconditioner
             print(f"Solving {name} (With AMG)...")
             try:
                 M_amg = AMGPreconditioner(A_csc)

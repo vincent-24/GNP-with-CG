@@ -1,7 +1,10 @@
 .DS_Store
 build
 **/*.egg-info/
-examples/dump/*
 data/*
 **/__pycache__/
 GNP/solver/temp.py
+
+examples/dump/*
+!dump/01-06-2026/checkpoints/
+!dump/01-06-2026/configs/
