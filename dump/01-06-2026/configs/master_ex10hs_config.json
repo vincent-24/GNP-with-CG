@@ -1,0 +1,14 @@
+{
+    "problem": "FIDAP/ex10hs",
+    "train_solver": "FGMRES",
+    "network": "SplitResGCN",
+    "m": 80,
+    "layers": 8,
+    "embed": 16,
+    "hidden": 32,
+    "epochs": 2000,
+    "batch_size": 16,
+    "best_loss": 0.7388609647750854,
+    "best_epoch": 240,
+    "date": "01-06-2026"
+}
