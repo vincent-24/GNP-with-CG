@@ -6,6 +6,8 @@ data/*
 GNP/solver/temp.py
 
 examples/dump/*
+dump/*
+!dump/*/
 dump/*/*
 !dump/*/checkpoints/
 !dump/*/configs/
