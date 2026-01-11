@@ -26,15 +26,22 @@ from GNP import config
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Harvest PCG trajectories for offline training')
-    parser.add_argument('--problem', type=str, default='HB/bcsstk16')
+    parser.add_argument('--problem', type=str, default=config.PROBLEM_PATH)
     parser.add_argument('--location', type=str, default=config.SUITE_SPARSE_PATH, help='Path to SuiteSparse data directory')
-    parser.add_argument('--num-runs', type=int, default=50, help='Number of random problems to generate')
-    parser.add_argument('--max-iters', type=int, default=200, help='Maximum PCG iterations per run')
-    parser.add_argument('--rtol', type=float, default=1e-10, help='Relative tolerance for PCG convergence')
-    parser.add_argument('--output', type=str, default='data/pcg_harvested.pt', help='Output path for harvested dataset')
+    parser.add_argument('--num-runs', type=int, default=config.HARVEST_NUM_RUNS, help='Number of random problems to generate')
+    parser.add_argument('--max-iters', type=int, default=config.HARVEST_MAX_ITERS, help='Maximum PCG iterations per run')
+    parser.add_argument('--rtol', type=float, default=config.HARVEST_RTOL, help='Relative tolerance for PCG convergence')
+    parser.add_argument('--output', type=str, default=None, help='Output path (auto-generated if not specified)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use (cuda/cpu)')
     parser.add_argument('--skip-every', type=int, default=1, help='Sample every N-th iteration (1 = all iterations)')
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Auto-generate output path to match train.py expectations
+    if args.output is None:
+        problem_name = args.problem.replace('/', '_')
+        args.output = os.path.join(config.OFFLINE_DATASET_DIR, f'pcg_harvested_{problem_name}.pt')
+    
+    return args
 
 def harvest_single_run(solver, A, x_true, max_iters, rtol):
     """

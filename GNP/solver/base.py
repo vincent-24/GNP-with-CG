@@ -10,11 +10,7 @@ from GNP import config
 
 class IterativeSolver:
     def _prepare_solve(self, b, x0, max_iters, desc, progress_bar=True):
-        # Initialize x
-        if x0 is None: x = torch.zeros_like(b)
-        else: x = x0.clone()
-
-        # Compute norm_b for relative residual
+        x = torch.zeros_like(b) if x0 is None else x0.clone()
         norm_b = torch.linalg.norm(b)
 
         if norm_b == 0: norm_b = 1.0
@@ -23,12 +19,8 @@ class IterativeSolver:
         hist_rel = []
         hist_energy = []
         hist_time = []
-        
-        # Initialize orthogonality tracking (only if enabled)
         self.search_directions = []
         self._direction_count = 0
-        
-        # Timer & Progress Bar
         tic = time.time()
         pbar = None
 
@@ -54,13 +46,12 @@ class IterativeSolver:
         return abs_res, rel_res
 
     def _record_direction(self, d):
-        """Record search direction for orthogonality analysis (if enabled)."""
+        """Record search direction for orthogonality heat map."""
         if not config.TRACK_ORTHOGONALITY:
             return
         
         self._direction_count += 1
         if self._direction_count % config.ORTHOGONALITY_SAMPLE_RATE == 0:
-            # Clone, detach, move to CPU to save GPU memory
             self.search_directions.append(d.detach().cpu().clone())
 
     def _compute_orthogonality(self, A):

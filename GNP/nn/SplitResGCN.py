@@ -65,6 +65,7 @@ class SplitResGCN(nn.Module):
             R = self.enc_bn[i](R)
             R = R.view(n, batch_size, -1)
             R = self.dropout(F.relu(R))
+            # R = self.dropout(R)
             
         # --- DECODER (L) ---
         for i in range(self.half_layers):
@@ -86,6 +87,7 @@ class SplitResGCN(nn.Module):
             R = self.dec_bn[i](R)
             R = R.view(n, batch_size, -1)
             R = self.dropout(F.relu(R))
+            # R = self.dropout(R)
 
         z = self.dec_mlp(R)
         z = z.view(n, batch_size)
