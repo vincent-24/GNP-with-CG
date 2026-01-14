@@ -14,11 +14,9 @@ import torch
 
 from GNP import config
 from GNP.factory import get_solver_info
-
 from scripts.utils import get_preconditioner, plot_results
 
-
-def eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path=None):
+def eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path=None, run_id=None):
     results = {}
     
     print(f"\n{'='*60}")
@@ -100,7 +98,7 @@ def eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path=Non
                 'error': str(e)
             }
     
-    plot_results(results, args, plot_dir)
+    plot_results(results, args, plot_dir, run_id)
     
     print(f"\n{'='*60}")
     print(f"{'Experiment':<30} {'Iters':>8} {'Final Res':>12}")

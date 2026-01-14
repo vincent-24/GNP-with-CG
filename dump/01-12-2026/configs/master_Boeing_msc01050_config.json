@@ -1,0 +1,12 @@
+{
+  "problem": "Boeing/msc01050",
+  "solver": "PCG",
+  "network": "SplitResGCN",
+  "epochs": 10,
+  "train_samples": 180180,
+  "val_samples": 20020,
+  "best_val_loss": 0.04114044196725177,
+  "best_epoch": 6,
+  "final_train_loss": 0.046145770682742754,
+  "final_val_loss": 0.048954148611690576
+}

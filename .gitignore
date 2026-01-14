@@ -11,9 +11,11 @@ dist/
 *.pt
 *.pth
 
-dump/
-data/pcg_harvested/
-data/SuiteSparse/
+dump/*
+!dump/01-12-2026
+data/pcg_harvested/*
+data/SuiteSparse/*
+logs/
 
 .vscode/
 .idea/
@@ -21,3 +23,6 @@ data/SuiteSparse/
 *.swo
 
 .ipynb_checkpoints/
+
+Miniconda3-latest-Linux-x86_64.sh
+run_exp.sbatch

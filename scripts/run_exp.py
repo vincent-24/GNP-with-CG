@@ -47,7 +47,7 @@ if __name__ == '__main__':
     print(f"Device: {device}")
     print(f"{'='*60}")
     
-    plot_dir = setup_experiment(args)   # sets seeds and creates output dirs
+    plot_dir, run_id = setup_experiment(args)   # sets seeds and creates output dirs
     A, A_csc, b, x_gt = load_problem(args, device)
     master_ckpt_path = args.checkpoint
     
@@ -55,7 +55,7 @@ if __name__ == '__main__':
     if args.mode in ('train', 'both'):
         print("\n\n\nTRAINING")
         print(f"{'='*60}")
-        master_ckpt_path = train_routine(A, b, x_gt, device, args, plot_dir)
+        master_ckpt_path = train_routine(A, b, x_gt, device, args, plot_dir, run_id)
     
     # Eval
     if args.mode in ('eval', 'both'):
@@ -65,6 +65,6 @@ if __name__ == '__main__':
         
         print("\n\n\nEVALUATION")
         print(f"{'='*60}")
-        eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path)
+        eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path, run_id)
     
     print("\nExperiment completed.")

@@ -23,17 +23,15 @@ DROP_RATE = 0.0
 
 # NN training
 BATCH_SIZE = 16
-EPOCHS = 50  # Full epochs (1 epoch = full pass through ~50k samples)
+EPOCHS = 5  
 LEARNING_RATE = 1e-3
-
-# Data generation
-NUM_DATA_SAMPLES = 50  # Number of random PCG runs to harvest for training
 
 TRAIN_OFFLINE = True   # Use streaming training (set True to use pre-harvested data)
 OFFLINE_DATASET_DIR = './data/pcg_harvested'  # Directory where harvested datasets are stored
 
 # Harvesting parameters (used when auto-generating dataset)
-HARVEST_NUM_RUNS = 50     # Number of random PCG runs to harvest
+HARVEST_DATASET_PATH = "data/pcg_harvested/pcg_harvested_HB_bcsstk19_ID65115-run2.pt"  # Set to a specific .pt file path to reuse existing dataset, or None to auto-generate
+HARVEST_NUM_RUNS = 200     # Number of random PCG runs to harvest
 HARVEST_MAX_ITERS = 1000   # Max iterations per PCG run
 HARVEST_RTOL = 1e-6        # Convergence tolerance for harvesting
 
@@ -43,10 +41,10 @@ NUM_WORKERS = 0
 DEFAULT_DUMP_PATH = './dump/'
 SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', './data')
 
-MODE = 'eval'
+MODE = 'both'
 SOLVERS = ['FGMRES', 'PCG']   #['all'] or ['FCG', 'PolakRibiereCG', 'PCG', 'FGMRES', ...]
 NETWORK_OVERRIDE = 'SplitResGCN'
-PROBLEM_PATH = 'HB/plat1919'
+PROBLEM_PATH = None
 TIE_WEIGHTS = True
 
 # Baseline solver for unpreconditioned / classical comparisons

@@ -88,27 +88,112 @@ class GNP():
         x = x_scaled / scaling_factor
         return x
 
+    # loss 1. ||r - A @ e_pred|| 
+    '''
     def _compute_physics_loss(self, r_in, e_pred):
-        """
-        Compute physics-based loss: ||r - A @ e_pred|| / ||r||
-        
-        Args:
-            r_in: Input residuals (n, batch)
-            e_pred: Predicted errors (n, batch)
-            
-        Returns:
-            Scalar loss value
-        """
         e_pred_double = e_pred.to(torch.float64)
-        r_recon = self._matmul(self.A_torch, e_pred_double)
-        r_recon = r_recon.to(self.dtype)
-        
-        diff_norm = torch.norm(r_in - r_recon, dim=0)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        loss = torch.mean(diff_norm_sq)
+        return loss
+    '''
+
+    # loss 2. ||r - Ae||^2 / ||b||
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
         ref_norm = torch.norm(r_in, dim=0)
         ref_norm = torch.where(ref_norm < 1e-12, torch.ones_like(ref_norm), ref_norm)
-        
-        loss = torch.mean((diff_norm / ref_norm) ** 2)
+        loss = torch.mean(diff_norm_sq / ref_norm)
         return loss
+    '''
+
+    # loss 2.4u. loss 2 unnormalized with soft stability (lambda = 1e-4)
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        ref_norm = torch.norm(r_in, dim=0)
+        ref_norm = torch.where(ref_norm < 1e-12, torch.ones_like(ref_norm), ref_norm)
+        term_error = torch.mean(diff_norm_sq / ref_norm)
+        term_reg = torch.mean(torch.norm(e_pred, dim=0) ** 2)
+        loss = term_error + (1e-4 * term_reg)
+        return loss
+    '''
+
+    # loss 2.4n. loss 2 normalized Tikhonov 
+    
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        numerator = diff_norm_sq + (1e-3 * e_norm_sq)
+        ref_norm = torch.norm(r_in, dim=0)
+        ref_norm = torch.where(ref_norm < 1e-12, torch.ones_like(ref_norm), ref_norm)
+        loss = torch.mean(numerator / ref_norm)
+        return loss
+    
+
+    # loss 3. ||r - Ae||^2 / ||A||_F
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        # For sparse tensors (COO or CSR), compute Frobenius norm from values
+        if self.A_torch.is_sparse or self.A_torch.layout in (torch.sparse_csr, torch.sparse_csc):
+            A_norm = torch.norm(self.A_torch.values())
+        else:
+            A_norm = torch.norm(self.A_torch)
+        loss = torch.mean(diff_norm_sq) / (A_norm + 1e-12)
+        return loss
+    '''
+
+    # loss 4. ||r - Ae||^2 + ||e||^2
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        loss = torch.mean(diff_norm_sq + e_norm_sq)
+        return loss
+    '''
+
+    # loss 5. ||r - Ae||^2 + ||Ae||^2
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        recon_norm_sq = torch.norm(Ae, dim=0) ** 2
+        loss = torch.mean(diff_norm_sq + recon_norm_sq)
+        return loss
+    '''
+
+    # loss 6. ||Ae||^2 / ||b||^2
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+        recon_norm_sq = torch.norm(Ae, dim=0) ** 2
+        ref_norm_sq = torch.norm(r_in, dim=0) ** 2
+        ref_norm_sq = torch.where(ref_norm_sq < 1e-12, torch.ones_like(ref_norm_sq), ref_norm_sq)
+        loss = torch.mean(recon_norm_sq / ref_norm_sq)
+        return loss
+    '''
 
     def train(self, train_loader, val_loader, epochs, optimizer, scheduler=None, 
               checkpoint_path=None, progress_bar=True):
@@ -139,6 +224,8 @@ class GNP():
         
         print(f"Starting training: {epochs} epochs, {len(train_loader)} batches/epoch")
         
+        train_miniters = max(1, len(train_loader) // 100)
+        
         # Epoch loop
         for epoch in range(epochs):
             # ==================== TRAINING ====================
@@ -146,7 +233,8 @@ class GNP():
             epoch_train_losses = []
             
             train_pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]", 
-                              leave=False, disable=not progress_bar)
+                              leave=False, disable=not progress_bar, 
+                              miniters=train_miniters, mininterval=0)
             
             for batch_idx, (r_batch, e_batch) in enumerate(train_pbar):
                 # Move to device and transpose: (batch, n) -> (n, batch)
@@ -165,7 +253,9 @@ class GNP():
                 optimizer.step()
                 
                 epoch_train_losses.append(loss.item())
-                train_pbar.set_postfix({'loss': f'{loss.item():.2e}'})
+                # Only update postfix at miniters intervals to reduce log verbosity
+                if batch_idx % train_miniters == 0 or batch_idx == len(train_loader) - 1:
+                    train_pbar.set_postfix({'loss': f'{loss.item():.2e}'})
             
             avg_train_loss = np.mean(epoch_train_losses)
             hist_train_loss.append(avg_train_loss)
@@ -199,7 +289,7 @@ class GNP():
                     torch.save(self.net.state_dict(), checkpoint_path)
             
             # ==================== LOGGING ====================
-            status = "✓ (saved)" if improved else ""
+            status = " (saved)" if improved else ""
             print(f"Epoch {epoch+1:3d}/{epochs} | "
                   f"Train: {avg_train_loss:.4e} | "
                   f"Val: {avg_val_loss:.4e} {status}")

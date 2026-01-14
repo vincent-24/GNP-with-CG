@@ -40,6 +40,8 @@ def generate_run_id():
     return str(random.randint(10000, 99999))
 
 def setup_experiment(args):
+    run_id = generate_run_id()
+    
     torch.manual_seed(config.SEED)
     np.random.seed(config.SEED)
     random.seed(config.SEED)
@@ -48,8 +50,9 @@ def setup_experiment(args):
     Path(args.dump_root).mkdir(parents=True, exist_ok=True)
     plot_dir = get_timestamp_dir(args.dump_root)
     print(f"\nOutput directory: {plot_dir}")
+    print(f"Run ID: {run_id}")
     
-    return plot_dir
+    return plot_dir, run_id
 
 def load_problem(args, device):
     """
@@ -128,10 +131,10 @@ def get_preconditioner(precond_type, A, A_csc, device, args, master_ckpt_path=No
     else:
         raise ValueError(f"Unknown preconditioner type: {precond_type}")
 
-def plot_results(results, args, plot_dir):
+def plot_results(results, args, plot_dir, run_id):
     print("\nGenerating Comparison Plots...")
     
-    base_prefix = os.path.join(plot_dir, f"{args.problem.replace('/', '_')}_comparison")
+    base_prefix = os.path.join(plot_dir, f"{args.problem.replace('/', '_')}_ID{run_id}_comparison")
     style_map = {exp['name']: exp['style'] for exp in config.EXPERIMENTS}
     
     plt.figure(figsize=(12, 6))
@@ -142,7 +145,7 @@ def plot_results(results, args, plot_dir):
             plt.semilogy(
                 res['res_history'], 
                 color=style.get('color', 'gray'),
-                linestyle='-',  # Force SOLID lines
+                linestyle='-', 
                 linewidth=style.get('linewidth', 2),
                 label=name
             )
@@ -192,8 +195,42 @@ def plot_results(results, args, plot_dir):
             plt.xlabel(r"Iteration $j$")
             plt.ylabel(r"Iteration $i$")
             plt.tight_layout()
-            filename = f"{args.problem.replace('/', '_')}_{name.replace(' ', '_').replace('(', '').replace(')', '')}_heatmap.png"
+            filename = f"{args.problem.replace('/', '_')}_ID{run_id}_{name.replace(' ', '_').replace('(', '').replace(')', '')}_heatmap.png"
             plt.savefig(os.path.join(plot_dir, filename), bbox_inches='tight')
             print(f"Heatmap saved: {filename}")
     
     print(f"Plots saved to {base_prefix}_*.png")
+
+def plot_learning_curve(train_loss, val_loss, args, plot_dir, run_id, best_epoch=None):
+    if not train_loss or not val_loss:
+        print("Warning: Empty loss history, skipping learning curve plot.")
+        return
+    
+    epochs = range(1, len(train_loss) + 1)
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, train_loss, label='Training Loss', color='#2563eb', linewidth=2, marker='o', markersize=4)
+    plt.plot(epochs, val_loss, label='Validation Loss', color='#ea580c', linewidth=2, linestyle='-', marker='s', markersize=4)
+    
+    if best_epoch is not None and 1 <= best_epoch <= len(val_loss):
+        best_val = val_loss[best_epoch - 1]
+        plt.axvline(x=best_epoch, color='#16a34a', linestyle=':', linewidth=1.5, alpha=0.7)
+        plt.scatter([best_epoch], [best_val], color='#16a34a', s=100, zorder=5, 
+                    marker='*', label=f'Best Val (epoch {best_epoch})')
+    
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Physics Loss', fontsize=12)
+    plt.title(f'GNP Training Learning Curve ({args.problem})', fontsize=14)
+    plt.yscale('log')
+    plt.grid(True, which='both', linestyle='-', alpha=0.2)
+    plt.legend(loc='upper right', fontsize=10)
+    plt.xticks(epochs)
+    plt.xlim(0.5, len(train_loss) + 0.5)
+    plt.tight_layout()
+
+    filename = f"{args.problem.replace('/', '_')}_ID{run_id}_learning_curve.png"
+    save_path = os.path.join(plot_dir, filename)
+
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Learning curve saved: {save_path}")

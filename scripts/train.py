@@ -24,8 +24,9 @@ from GNP import config
 from GNP.factory import get_solver_info, get_network_class
 from GNP.solver.PCG import PCG
 from GNP.problems import gen_x_randn
+from scripts.utils import plot_learning_curve
 
-def harvest_pcg_dataset(A, b, device, args):
+def harvest_pcg_dataset(A, b, device, args, run_id):
     """
     Harvest PCG trajectories to generate training data.
     Runs unpreconditioned PCG on random RHS vectors and collects (r, e) pairs.
@@ -34,7 +35,7 @@ def harvest_pcg_dataset(A, b, device, args):
     
     dataset_dir = config.OFFLINE_DATASET_DIR
     Path(dataset_dir).mkdir(parents=True, exist_ok=True)
-    filename = f'pcg_harvested_{args.problem.replace("/", "_")}.pt'
+    filename = f'pcg_harvested_{args.problem.replace("/", "_")}_ID{run_id}.pt'
     path = os.path.join(dataset_dir, filename)
     
     solver = PCG()
@@ -42,7 +43,9 @@ def harvest_pcg_dataset(A, b, device, args):
     all_e = []
     n = A.shape[0]
     
-    for i in tqdm(range(config.HARVEST_NUM_RUNS), desc="Harvesting"):
+    harvest_miniters = max(1, config.HARVEST_NUM_RUNS // 100)
+    
+    for i in tqdm(range(config.HARVEST_NUM_RUNS), desc="Harvesting", miniters=harvest_miniters, mininterval=0):
         x_true = gen_x_randn(n).to(device).to(A.dtype)
         b_sample = A @ x_true
         
@@ -75,8 +78,7 @@ def harvest_pcg_dataset(A, b, device, args):
     print(f"[Harvest] Dataset saved to {path} ({len(all_r)} samples)")
     return path
 
-
-def train_routine(A, b, x_gt, device, args, plot_dir):
+def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
     """
     Train the GNP neural preconditioner with proper train/val split.
     
@@ -106,14 +108,13 @@ def train_routine(A, b, x_gt, device, args, plot_dir):
     
     gnp = GNP(A, 'x_mix', current_m, net, device, use_lanczos=cfg['use_lanczos'])
     optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-4)
-    dataset_name = f'pcg_harvested_{args.problem.replace("/", "_")}.pt'
-    dataset_path = os.path.join(args.data_root, dataset_name)
     
-    if not os.path.exists(dataset_path):
-        print(f"Dataset not found. Harvesting...")
-        dataset_path = harvest_pcg_dataset(A, b, device, args)
+    if config.HARVEST_DATASET_PATH is not None:
+        dataset_path = config.HARVEST_DATASET_PATH
+        print(f"Using specified dataset: {dataset_path}")
     else:
-        print(f"Using existing dataset: {dataset_path}")
+        print(f"Generating new dataset with run ID {run_id}...")
+        dataset_path = harvest_pcg_dataset(A, b, device, args, run_id)
     
     full_dataset = OfflineDataset(dataset_path)
     train_size = int(0.9 * len(full_dataset))
@@ -140,7 +141,7 @@ def train_routine(A, b, x_gt, device, args, plot_dir):
         pin_memory=True
     )
     
-    master_ckpt_path = os.path.join(plot_dir, 'checkpoints', f'master_{args.problem.replace("/", "_")}.pt')
+    master_ckpt_path = os.path.join(plot_dir, 'checkpoints', f'master_{args.problem.replace("/", "_")}_ID{run_id}.pt')
     
     print(f"\nTraining for {config.EPOCHS} epochs...")
     print(f"  Batch size: {config.BATCH_SIZE}")
@@ -156,21 +157,53 @@ def train_routine(A, b, x_gt, device, args, plot_dir):
         progress_bar=True
     )
     
-    cfg_path = os.path.join(plot_dir, 'configs', f'master_{args.problem.replace("/", "_")}_config.json')
+    cfg_path = os.path.join(plot_dir, 'configs', f'master_{args.problem.replace("/", "_")}_ID{run_id}_config.json')
     train_cfg = {
+        'run_id': run_id,
         'problem': args.problem,
+        'device': str(device),
+        'seed': config.SEED,
         'solver': args.solver,
-        'network': net_cls.__name__,
-        'epochs': config.EPOCHS,
-        'train_samples': len(train_dataset),
-        'val_samples': len(val_dataset),
-        'best_val_loss': best_val_loss,
-        'best_epoch': best_epoch,
-        'final_train_loss': hist_train_loss[-1] if hist_train_loss else None,
-        'final_val_loss': hist_val_loss[-1] if hist_val_loss else None,
+        'tolerance': config.TOLERANCE,
+        'max_iters': config.MAX_ITERS,
+        'fgmres_restart': config.RESTART,
+        'lanczos_m': config.LANCZOS_M if cfg['use_lanczos'] else None,
+        'arnoldi_m': config.ARNOLDI_M if not cfg['use_lanczos'] else None,
+        
+        'nn_architecture': {
+            'network': net_cls.__name__,
+            'num_layers': config.NUM_LAYERS,
+            'embed_dim': config.EMBED_DIM,
+            'hidden_dim': config.HIDDEN_DIM,
+            'drop_rate': config.DROP_RATE,
+            'tie_weights': args.tie_weights if net_cls.__name__ == 'SplitResGCN' else None,
+        },
+        'nn_training': {
+            'epochs': config.EPOCHS,
+            'batch_size': config.BATCH_SIZE,
+            'learning_rate': config.LEARNING_RATE,
+            'train_samples': len(train_dataset),
+            'val_samples': len(val_dataset),
+            'best_val_loss': best_val_loss,
+            'best_epoch': best_epoch,
+            'final_train_loss': hist_train_loss[-1] if hist_train_loss else None,
+            'final_val_loss': hist_val_loss[-1] if hist_val_loss else None,
+        },
+        'harvest': {
+            'dataset_path': dataset_path,
+            'num_runs': config.HARVEST_NUM_RUNS,
+            'max_iters': config.HARVEST_MAX_ITERS,
+            'rtol': config.HARVEST_RTOL,
+            'train_offline': config.TRAIN_OFFLINE,
+            'offline_dataset_dir': config.OFFLINE_DATASET_DIR,
+        },
+
+        'checkpoint_path': master_ckpt_path,
     }
     with open(cfg_path, 'w') as f:
         json.dump(train_cfg, f, indent=2)
+    
+    plot_learning_curve(hist_train_loss, hist_val_loss, args, plot_dir, run_id, best_epoch=best_epoch)
     
     print(f"\n{'='*60}")
     print(f"Training Complete!")

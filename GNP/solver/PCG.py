@@ -35,8 +35,8 @@ class PCG(IterativeSolver):
                 
             alpha = delta_new / dAq
             x = x + alpha * d
-            r = b - A @ x
-            # r = r - alpha * q
+            # r = b - A @ x
+            r = r - alpha * q
             
             if return_trajectory:
                 history_r.append(r.detach().clone())

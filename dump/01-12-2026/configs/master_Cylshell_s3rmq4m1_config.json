@@ -1,0 +1,12 @@
+{
+  "problem": "Cylshell/s3rmq4m1",
+  "solver": "PCG",
+  "network": "SplitResGCN",
+  "epochs": 10,
+  "train_samples": 180180,
+  "val_samples": 20020,
+  "best_val_loss": 0.04474175413594412,
+  "best_epoch": 9,
+  "final_train_loss": 0.043993697593180794,
+  "final_val_loss": 0.04717565606981992
+}
