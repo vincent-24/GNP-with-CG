@@ -1,0 +1,40 @@
+{
+  "run_id": "57435",
+  "problem": "Cylshell/s3rmq4m1",
+  "device": "cuda",
+  "seed": 42,
+  "solver": "PCG",
+  "tolerance": 1e-10,
+  "max_iters": 2000,
+  "fgmres_restart": 10,
+  "lanczos_m": 80,
+  "arnoldi_m": null,
+  "nn_architecture": {
+    "network": "SplitResGCN",
+    "num_layers": 8,
+    "embed_dim": 16,
+    "hidden_dim": 32,
+    "drop_rate": 0.0,
+    "tie_weights": true
+  },
+  "nn_training": {
+    "epochs": 5,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "train_samples": 180180,
+    "val_samples": 20020,
+    "best_val_loss": -3.3289810951823716e+19,
+    "best_epoch": 5,
+    "final_train_loss": -3.326920185018014e+19,
+    "final_val_loss": -3.3289810951823716e+19
+  },
+  "harvest": {
+    "dataset_path": "data/pcg_harvested/pcg_harvested_Cylshell_s3rmq4m1_ID32163.pt",
+    "num_runs": 200,
+    "max_iters": 1000,
+    "rtol": 1e-06,
+    "train_offline": true,
+    "offline_dataset_dir": "./data/pcg_harvested"
+  },
+  "checkpoint_path": "/u/vterrelonge/ComputationalIntelligenceLabs/GNP-with-CG/dump/01-19-2026/checkpoints/master_Cylshell_s3rmq4m1_ID57435.pt"
+}

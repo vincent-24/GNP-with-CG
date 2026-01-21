@@ -1,0 +1,1 @@
+$L = \frac{1}{N} \sum_{i=1}^{N} \frac{\| \mathbf{r}_i - \mathbf{A}\mathbf{e}_i \|_2^2 + 10^{-3} \| \mathbf{e}_i \|_2^2}{\| \mathbf{r}_i \|_2}$

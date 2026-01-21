@@ -8,7 +8,6 @@ import scipy.sparse as sp
 import math
 from tqdm import tqdm
 
-
 class OfflineDataset(Dataset):
     """Dataset for offline training with pre-harvested (residual, error) pairs."""
     def __init__(self, dataset_path):
@@ -35,7 +34,6 @@ class OfflineDataset(Dataset):
     def __getitem__(self, idx): 
         return self.residuals[idx], self.errors[idx]
 
-
 class GNP():
     """
     Graph Neural Preconditioner.
@@ -53,6 +51,7 @@ class GNP():
         self.use_lanczos = use_lanczos
         self.n = A.shape[0]
         self.A_torch = None
+        self.loss_params = torch.nn.Parameter(torch.zeros(2, device=device))
 
     def _prepare_A_torch(self):
         """Convert matrix A to torch tensor on device (lazy initialization)."""
@@ -128,7 +127,7 @@ class GNP():
     '''
 
     # loss 2.4n. loss 2 normalized Tikhonov 
-    
+    '''
     def _compute_physics_loss(self, r_in, e_pred):
         e_pred_double = e_pred.to(torch.float64)
         Ae = self._matmul(self.A_torch, e_pred_double)
@@ -140,7 +139,7 @@ class GNP():
         ref_norm = torch.where(ref_norm < 1e-12, torch.ones_like(ref_norm), ref_norm)
         loss = torch.mean(numerator / ref_norm)
         return loss
-    
+    '''
 
     # loss 3. ||r - Ae||^2 / ||A||_F
     '''
@@ -194,6 +193,123 @@ class GNP():
         loss = torch.mean(recon_norm_sq / ref_norm_sq)
         return loss
     '''
+
+    # log 1
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        
+        numerator = diff_norm_sq + (1e-4 * e_norm_sq)
+        
+        ref_norm_sq = torch.norm(r_in, dim=0) ** 2
+        ref_norm_sq = torch.where(ref_norm_sq < 1e-12, torch.ones_like(ref_norm_sq), ref_norm_sq)
+        
+        ratio = numerator / ref_norm_sq
+        
+        epsilon = 1e-16 
+        loss = torch.mean(torch.log(ratio + epsilon))
+        
+        return loss
+    '''
+
+    # log 2
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+
+        ref_norm_sq = torch.norm(r_in, dim=0) ** 2
+        safe_ref = torch.where(ref_norm_sq < 1e-12, torch.ones_like(ref_norm_sq), ref_norm_sq)
+
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        ratio_res = diff_norm_sq / safe_ref
+        loss_res = torch.mean(torch.log(ratio_res + 1e-16))
+
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        ratio_reg = e_norm_sq / safe_ref
+        loss_reg = torch.mean(ratio_reg)
+        
+        loss = loss_res + (1e-4 * loss_reg)
+        
+        return loss
+    '''
+
+    # log 3
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+
+        ref_norm_sq = torch.norm(r_in, dim=0) ** 2
+        safe_ref = torch.where(ref_norm_sq < 1e-12, torch.ones_like(ref_norm_sq), ref_norm_sq)
+
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        ratio_res = diff_norm_sq / safe_ref
+        
+        loss_res = torch.mean(torch.log(ratio_res + 1e-16))
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        ratio_reg = e_norm_sq / safe_ref
+        loss_reg = torch.mean(torch.log1p(ratio_reg))
+        
+        loss = loss_res + (0.1 * loss_reg)
+        
+        return loss
+    '''
+
+    # log 4
+    '''
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        Ae_norm_sq = torch.norm(Ae, dim=0) ** 2
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        numerator = diff_norm_sq + (1e-5 * Ae_norm_sq) + (1e-9 * e_norm_sq)
+        ref_norm_sq = torch.norm(r_in, dim=0) ** 2
+        safe_ref = torch.where(ref_norm_sq < 1e-12, torch.ones_like(ref_norm_sq), ref_norm_sq)
+        ratio = numerator / safe_ref
+        loss = torch.mean(torch.log(ratio + 1e-16))
+        
+        return loss
+    '''
+
+    # log 5
+    def _compute_physics_loss(self, r_in, e_pred):
+        e_pred_double = e_pred.to(torch.float64)
+        Ae = self._matmul(self.A_torch, e_pred_double)
+        Ae = Ae.to(self.dtype)
+
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        numerator = diff_norm_sq + (1e-4 * e_norm_sq)
+
+        ref_norm_sq = torch.norm(r_in, dim=0) ** 2
+        safe_ref = torch.where(ref_norm_sq < 1e-12, torch.ones_like(ref_norm_sq), ref_norm_sq)
+        
+        diff_norm_sq = torch.norm(r_in - Ae, dim=0) ** 2
+        e_norm_sq = torch.norm(e_pred, dim=0) ** 2
+        ratio_coupled = (diff_norm_sq + 1e-4 * e_norm_sq) / safe_ref
+        loss_1 = torch.mean(torch.log(ratio_coupled + 1e-16))
+
+        ratio_pure = diff_norm_sq / safe_ref
+        loss_2 = torch.mean(torch.log(ratio_pure + 1e-16))
+        
+        s1 = self.loss_params[0]
+        s2 = self.loss_params[1]
+        
+        weighted_loss = (torch.exp(-s1) * loss_1 + s1) + \
+                        (torch.exp(-s2) * loss_2 + s2)
+        
+        return weighted_loss
 
     def train(self, train_loader, val_loader, epochs, optimizer, scheduler=None, 
               checkpoint_path=None, progress_bar=True):

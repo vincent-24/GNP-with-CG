@@ -12,7 +12,9 @@ dist/
 *.pth
 
 dump/*
-!dump/01-12-2026
+!dump/01-14-2026
+!dump/01-19-2026
+!dump/01-20-2026
 data/pcg_harvested/*
 data/SuiteSparse/*
 logs/
@@ -26,3 +28,4 @@ logs/
 
 Miniconda3-latest-Linux-x86_64.sh
 run_exp.sbatch
+ARCHITECTURE.md 

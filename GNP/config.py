@@ -5,8 +5,8 @@ SEED = 42
 
 # Solver Configurations
 RESTART = 10
-MAX_ITERS = 1000
-TOLERANCE = 1e-6
+MAX_ITERS = 2000
+TOLERANCE = 1e-10
 
 # FCG Specific Settings
 TRUNCATION_K = None
@@ -30,10 +30,10 @@ TRAIN_OFFLINE = True   # Use streaming training (set True to use pre-harvested d
 OFFLINE_DATASET_DIR = './data/pcg_harvested'  # Directory where harvested datasets are stored
 
 # Harvesting parameters (used when auto-generating dataset)
-HARVEST_DATASET_PATH = "data/pcg_harvested/pcg_harvested_HB_bcsstk19_ID65115-run2.pt"  # Set to a specific .pt file path to reuse existing dataset, or None to auto-generate
+HARVEST_DATASET_PATH = None  # Set to a specific .pt file path to reuse existing dataset, or None to auto-generate
 HARVEST_NUM_RUNS = 200     # Number of random PCG runs to harvest
 HARVEST_MAX_ITERS = 1000   # Max iterations per PCG run
-HARVEST_RTOL = 1e-6        # Convergence tolerance for harvesting
+HARVEST_RTOL = 1e-10        # Convergence tolerance for harvesting
 
 #==================SYSTEM/PATHS & ENVIRONMENT CONFIG==================#
 import os
@@ -88,6 +88,13 @@ EXPERIMENTS = [
         'precond': 'IChol',
         'precond_kwargs': {'shift': 1e-3},  # Diagonal shift for stability
         'style': {'color': 'red', 'linestyle': '-', 'linewidth': 2}
+    },
+    {
+        'name': 'FCG (GNP)',
+        'solver': 'FCG',
+        'precond': 'GNP',
+        'precond_kwargs': {},
+        'style': {'color': 'purple', 'linestyle': '-', 'linewidth': 2}
     },
     # {
     #     'name': 'PCG (ILU)',

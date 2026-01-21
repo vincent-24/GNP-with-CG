@@ -1,0 +1,40 @@
+{
+  "run_id": "51482",
+  "problem": "FIDAP/ex10",
+  "device": "cuda",
+  "seed": 42,
+  "solver": "PCG",
+  "tolerance": 1e-06,
+  "max_iters": 1000,
+  "fgmres_restart": 10,
+  "lanczos_m": 80,
+  "arnoldi_m": null,
+  "nn_architecture": {
+    "network": "SplitResGCN",
+    "num_layers": 8,
+    "embed_dim": 16,
+    "hidden_dim": 32,
+    "drop_rate": 0.0,
+    "tie_weights": true
+  },
+  "nn_training": {
+    "epochs": 5,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "train_samples": 60342,
+    "val_samples": 6705,
+    "best_val_loss": 0.002554255735620765,
+    "best_epoch": 4,
+    "final_train_loss": 0.002650454218544496,
+    "final_val_loss": 0.002735613570216412
+  },
+  "harvest": {
+    "dataset_path": "./data/pcg_harvested/pcg_harvested_FIDAP_ex10_ID51482.pt",
+    "num_runs": 200,
+    "max_iters": 1000,
+    "rtol": 1e-06,
+    "train_offline": true,
+    "offline_dataset_dir": "./data/pcg_harvested"
+  },
+  "checkpoint_path": "/u/vterrelonge/ComputationalIntelligenceLabs/GNP-with-CG/dump/01-14-2026/checkpoints/master_FIDAP_ex10_ID51482.pt"
+}

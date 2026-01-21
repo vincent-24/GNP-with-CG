@@ -30,6 +30,8 @@ def harvest_pcg_dataset(A, b, device, args, run_id):
     """
     Harvest PCG trajectories to generate training data.
     Runs unpreconditioned PCG on random RHS vectors and collects (r, e) pairs.
+    
+    Memory-efficient: saves incrementally to avoid OOM on large matrices.
     """
     print(f"\n[Harvest] Generating training data from {config.HARVEST_NUM_RUNS} CG runs.")
     
@@ -39,9 +41,15 @@ def harvest_pcg_dataset(A, b, device, args, run_id):
     path = os.path.join(dataset_dir, filename)
     
     solver = PCG()
-    all_r = []
-    all_e = []
     n = A.shape[0]
+    
+    # Memory-efficient: save in chunks to avoid OOM on large matrices
+    CHUNK_SIZE = 50  # Save every 50 PCG runs
+    all_r_chunks = []
+    all_e_chunks = []
+    chunk_r = []
+    chunk_e = []
+    total_samples = 0
     
     harvest_miniters = max(1, config.HARVEST_NUM_RUNS // 100)
     
@@ -62,20 +70,37 @@ def harvest_pcg_dataset(A, b, device, args, run_id):
         
         for r_k, x_k in zip(history_r, history_x):
             e_k = x_true - x_k
-            all_r.append(r_k.cpu())  
-            all_e.append(e_k.cpu())
-            
+            chunk_r.append(r_k.cpu())  
+            chunk_e.append(e_k.cpu())
+        
+        # Save chunk to disk periodically to free memory
+        if (i + 1) % CHUNK_SIZE == 0 and chunk_r:
+            all_r_chunks.append(torch.stack(chunk_r))
+            all_e_chunks.append(torch.stack(chunk_e))
+            total_samples += len(chunk_r)
+            chunk_r = []
+            chunk_e = []
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    
+    if chunk_r:
+        all_r_chunks.append(torch.stack(chunk_r))
+        all_e_chunks.append(torch.stack(chunk_e))
+        total_samples += len(chunk_r)
+    
     dataset = {
-        'r': torch.stack(all_r),
-        'e': torch.stack(all_e),
+        'r': torch.cat(all_r_chunks, dim=0),
+        'e': torch.cat(all_e_chunks, dim=0),
         'metadata': {
             'problem': args.problem,
             'num_runs': config.HARVEST_NUM_RUNS,
-            'total_samples': len(all_r)
+            'total_samples': total_samples
         }
     }
     torch.save(dataset, path)
-    print(f"[Harvest] Dataset saved to {path} ({len(all_r)} samples)")
+    print(f"[Harvest] Dataset saved to {path} ({total_samples} samples)")
     return path
 
 def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
@@ -107,10 +132,17 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
     print(f"  Parameters: {sum(p.numel() for p in net.parameters()):,}")
     
     gnp = GNP(A, 'x_mix', current_m, net, device, use_lanczos=cfg['use_lanczos'])
-    optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-4)
+    # optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(
+        list(net.parameters()) + [gnp.loss_params],
+        lr=config.LEARNING_RATE, 
+        weight_decay=1e-4
+    )
     
-    if config.HARVEST_DATASET_PATH is not None:
-        dataset_path = config.HARVEST_DATASET_PATH
+    # Use command-line arg if provided, otherwise fall back to config, otherwise auto-generate
+    harvest_path = getattr(args, 'harvest_dataset', None) or config.HARVEST_DATASET_PATH
+    if harvest_path is not None:
+        dataset_path = harvest_path
         print(f"Using specified dataset: {dataset_path}")
     else:
         print(f"Generating new dataset with run ID {run_id}...")
