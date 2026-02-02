@@ -27,6 +27,7 @@ temp/
 .ipynb_checkpoints/
 
 Miniconda3-latest-Linux-x86_64.sh
+Miniforge3-Linux-aarch64.sh
 run_exp.sbatch
 run_exp.sh
 ARCHITECTURE.md 
