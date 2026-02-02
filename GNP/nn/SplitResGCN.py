@@ -48,9 +48,28 @@ class SplitResGCN(nn.Module):
                 self.dec_skip.append(nn.Linear(embed, embed))
             
         self.dropout = nn.Dropout(drop_rate)
+        
+        # Cast all parameters to target dtype for Float64 support
+        if dtype == torch.float64:
+            self._cast_to_float64()
+
+    def _cast_to_float64(self):
+        """Cast all network parameters and buffers to float64."""
+        for module in self.modules():
+            if isinstance(module, (nn.Linear, nn.BatchNorm1d)):
+                module.weight.data = module.weight.data.double()
+                if module.bias is not None:
+                    module.bias.data = module.bias.data.double()
+            if isinstance(module, nn.BatchNorm1d):
+                module.running_mean = module.running_mean.double() if module.running_mean is not None else None
+                module.running_var = module.running_var.double() if module.running_var is not None else None
 
     def forward(self, r):
         n, batch_size = r.shape
+        
+        # Ensure input matches network dtype
+        r = r.to(self.dtype)
+        
         if self.scale_input:
             scaling = torch.linalg.vector_norm(r, dim=0) / np.sqrt(n)
             scaling = torch.where(scaling < 1e-12, torch.tensor(1.0, device=r.device, dtype=r.dtype), scaling)

@@ -44,10 +44,9 @@ def harvest_pcg_dataset(A, b, device, args, run_id):
     n = A.shape[0]
     
     # Memory-efficient: save in chunks to avoid OOM on large matrices
+    # Storage optimization: only save errors (e), residuals computed on-the-fly
     CHUNK_SIZE = 50  # Save every 50 PCG runs
-    all_r_chunks = []
     all_e_chunks = []
-    chunk_r = []
     chunk_e = []
     total_samples = 0
     
@@ -68,35 +67,55 @@ def harvest_pcg_dataset(A, b, device, args, run_id):
         trajectory = result[-1] 
         history_r, history_x = trajectory
         
-        for r_k, x_k in zip(history_r, history_x):
-            e_k = x_true - x_k
-            chunk_r.append(r_k.cpu())  
-            chunk_e.append(e_k.cpu())
+        # Apply log sampling if enabled: only save iterations 0, 1, 2, 4, 8, 16, ...
+        # This biases towards early iterations where residual changes are most informative
+        if config.LOG_SAMPLING:
+            num_iters = len(history_x)
+            sample_indices = set([0])  # Always include first iteration
+            power = 0
+            while True:
+                idx = int(config.LOG_SAMPLING_BASE ** power)
+                if idx >= num_iters:
+                    break
+                sample_indices.add(idx)
+                power += 1
+            if num_iters > 0:
+                sample_indices.add(num_iters - 1)  # Always include last iteration
+            sample_indices = sorted(sample_indices)
+            
+            # Only save error vectors at sampled iterations
+            for idx in sample_indices:
+                e_k = x_true - history_x[idx]
+                chunk_e.append(e_k.cpu())
+        else:
+            # Save all iterations (original behavior)
+            for r_k, x_k in zip(history_r, history_x):
+                e_k = x_true - x_k
+                chunk_e.append(e_k.cpu())
         
         # Save chunk to disk periodically to free memory
-        if (i + 1) % CHUNK_SIZE == 0 and chunk_r:
-            all_r_chunks.append(torch.stack(chunk_r))
+        if (i + 1) % CHUNK_SIZE == 0 and chunk_e:
             all_e_chunks.append(torch.stack(chunk_e))
-            total_samples += len(chunk_r)
-            chunk_r = []
+            total_samples += len(chunk_e)
             chunk_e = []
             import gc
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     
-    if chunk_r:
-        all_r_chunks.append(torch.stack(chunk_r))
+    if chunk_e:
         all_e_chunks.append(torch.stack(chunk_e))
-        total_samples += len(chunk_r)
+        total_samples += len(chunk_e)
     
+    # Storage optimization: only save errors, residuals computed on-the-fly
     dataset = {
-        'r': torch.cat(all_r_chunks, dim=0),
         'e': torch.cat(all_e_chunks, dim=0),
         'metadata': {
             'problem': args.problem,
             'num_runs': config.HARVEST_NUM_RUNS,
-            'total_samples': total_samples
+            'total_samples': total_samples,
+            'log_sampling': config.LOG_SAMPLING,
+            'log_sampling_base': config.LOG_SAMPLING_BASE if config.LOG_SAMPLING else None
         }
     }
     torch.save(dataset, path)
@@ -148,7 +167,9 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
         print(f"Generating new dataset with run ID {run_id}...")
         dataset_path = harvest_pcg_dataset(A, b, device, args, run_id)
     
-    full_dataset = OfflineDataset(dataset_path)
+    # Pass A to OfflineDataset for on-the-fly residual computation (r = A @ e)
+    # A is kept on CPU within the dataset for multi-process DataLoader safety
+    full_dataset = OfflineDataset(dataset_path, A=A)
     train_size = int(0.9 * len(full_dataset))
     val_size = len(full_dataset) - train_size
     generator = torch.Generator().manual_seed(config.SEED)

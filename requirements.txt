@@ -1,7 +1,3 @@
-numpy<2.0
-scipy
-matplotlib
 tqdm
-pyamg
 pathlib
 argparse

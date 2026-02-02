@@ -9,30 +9,88 @@ import math
 from tqdm import tqdm
 
 class OfflineDataset(Dataset):
-    """Dataset for offline training with pre-harvested (residual, error) pairs."""
-    def __init__(self, dataset_path):
+    """
+    Dataset for offline training with pre-harvested error vectors.
+    
+    Storage Optimization: Only error vectors (e) are stored on disk.
+    Residuals (r) are computed on-the-fly via r = A @ e during training.
+    
+    Args:
+        dataset_path: Path to .pt file containing {'e': tensor, 'metadata': dict}
+        A: System matrix (scipy sparse or torch tensor). Kept on CPU for 
+           multi-process DataLoader compatibility.
+    """
+    def __init__(self, dataset_path, A=None):
         super().__init__()
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+        
         data = torch.load(dataset_path, weights_only=False)
         if isinstance(data, dict):
-            self.residuals = data['r']
+            # Support both legacy format (with 'r') and new format (without 'r')
             self.errors = data['e']
             self.metadata = data.get('metadata', {})
+            self._has_legacy_residuals = 'r' in data
+            if self._has_legacy_residuals:
+                self._legacy_residuals = data['r']
         else:
-            raise ValueError("Dataset must be a dict with 'r' and 'e' keys")
-        self.n_samples = self.residuals.shape[0]
-        self.n_dim = self.residuals.shape[1]
+            raise ValueError("Dataset must be a dict with 'e' key")
+        
+        self.n_samples = self.errors.shape[0]
+        self.n_dim = self.errors.shape[1]
+        
+        # Store A on CPU for multi-process data loading safety
+        self.A_cpu = None
+        if A is not None:
+            self._set_matrix(A)
+        elif not self._has_legacy_residuals:
+            raise ValueError("Matrix A is required for datasets without pre-computed residuals")
+        
         print(f"Loaded offline dataset: {self.n_samples} samples, dim={self.n_dim}")
+        if self._has_legacy_residuals and A is None:
+            print(f"  Mode: Legacy (using pre-stored residuals)")
+        else:
+            print(f"  Mode: On-the-fly residual computation (r = A @ e)")
         if self.metadata:
             print(f"  Problem: {self.metadata.get('problem', 'unknown')}")
             print(f"  From {self.metadata.get('num_runs', 'unknown')} PCG runs")
+    
+    def _set_matrix(self, A):
+        """Convert and store A as a CPU torch sparse tensor matching errors dtype."""
+        # Get dtype from errors tensor (typically float64 from harvesting)
+        target_dtype = self.errors.dtype
+        
+        if sp.issparse(A):
+            coo = A.tocoo()
+            indices = torch.from_numpy(np.vstack((coo.row, coo.col))).long()
+            values = torch.from_numpy(coo.data).to(target_dtype)
+            shape = torch.Size(coo.shape)
+            self.A_cpu = torch.sparse_coo_tensor(indices, values, shape).coalesce()
+        elif torch.is_tensor(A):
+            self.A_cpu = A.cpu().to(target_dtype)
+            if A.is_sparse:
+                self.A_cpu = self.A_cpu.coalesce()
+        else:
+            self.A_cpu = torch.tensor(A, dtype=target_dtype)
             
     def __len__(self): 
         return self.n_samples
     
-    def __getitem__(self, idx): 
-        return self.residuals[idx], self.errors[idx]
+    def __getitem__(self, idx):
+        e = self.errors[idx]
+        
+        # Use legacy residuals if available and no A provided
+        if self._has_legacy_residuals and self.A_cpu is None:
+            r = self._legacy_residuals[idx]
+        else:
+            # Compute r = A @ e on-the-fly (on CPU)
+            e_col = e.unsqueeze(1)  # (n,) -> (n, 1)
+            if self.A_cpu.is_sparse:
+                r = torch.sparse.mm(self.A_cpu, e_col).squeeze(1)
+            else:
+                r = torch.mv(self.A_cpu, e)
+        
+        return r, e
 
 class GNP():
     """

@@ -22,6 +22,7 @@ from GNP.precond import GNP
 from GNP.precond.ILU import ILU
 from GNP.precond.IChol import IChol
 from GNP.precond.AMGPreconditioner import AMGPreconditioner
+from GNP.precond.MGGNN import MGGNNPreconditioner
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse
 from GNP import config
 from GNP.factory import get_solver_info, get_network_class
@@ -65,7 +66,7 @@ def load_problem(args, device):
     n = A.shape[0]
     print(f'Matrix n={n}, nnz={A._nnz()}')
     
-    classical_preconds = {'ILU', 'IChol', 'AMG'}
+    classical_preconds = {'ILU', 'IChol', 'AMG', 'MG-GNN'}
     needs_csc = any(
         exp.get('precond') in classical_preconds 
         for exp in config.EXPERIMENTS
@@ -127,6 +128,34 @@ def get_preconditioner(precond_type, A, A_csc, device, args, master_ckpt_path=No
     
     elif precond_type == 'AMG':
         return AMGPreconditioner(A_csc, **kwargs)
+    
+    elif precond_type == 'MG-GNN':
+        # MG-GNN Preconditioner: Neural Multigrid with learned operators
+        # Extract MG-GNN specific kwargs
+        levels = kwargs.pop('levels', 2)
+        coarsening_ratio = kwargs.pop('coarsening_ratio', 8)
+        num_subdomains = kwargs.pop('num_subdomains', None)
+        overlap = kwargs.pop('overlap', 1)
+        hidden_dim = kwargs.pop('hidden_dim', 64)
+        num_mg_layers = kwargs.pop('num_mg_layers', 4)
+        checkpoint_path = kwargs.pop('checkpoint_path', None)
+        # Use problem name from args for checkpoint auto-detection
+        problem_name = kwargs.pop('problem_name', getattr(args, 'problem', None))
+        
+        precond = MGGNNPreconditioner(
+            levels=levels,
+            coarsening_ratio=coarsening_ratio,
+            num_subdomains=num_subdomains,
+            overlap=overlap,
+            hidden_dim=hidden_dim,
+            num_mg_layers=num_mg_layers,
+            checkpoint_path=checkpoint_path,
+            problem_name=problem_name,
+            seed=config.SEED
+        )
+        # Setup with the matrix (MG-GNN needs A, not A_csc)
+        precond.setup(A)
+        return precond
     
     else:
         raise ValueError(f"Unknown preconditioner type: {precond_type}")

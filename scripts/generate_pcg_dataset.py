@@ -12,6 +12,7 @@ Usage:
 import os
 import sys
 import argparse
+import math
 import torch
 import numpy as np
 from pathlib import Path
@@ -33,7 +34,9 @@ def parse_args():
     parser.add_argument('--rtol', type=float, default=config.HARVEST_RTOL, help='Relative tolerance for PCG convergence')
     parser.add_argument('--output', type=str, default=None, help='Output path (auto-generated if not specified)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to use (cuda/cpu)')
-    parser.add_argument('--skip-every', type=int, default=1, help='Sample every N-th iteration (1 = all iterations)')
+    parser.add_argument('--skip-every', type=int, default=1, help='Sample every N-th iteration (1 = all iterations, ignored if log-sampling is enabled)')
+    parser.add_argument('--log-sampling', action='store_true', default=config.LOG_SAMPLING, help='Use logarithmic iteration sampling (e.g., 1, 2, 4, 8, 16...)')
+    parser.add_argument('--log-sampling-base', type=float, default=config.LOG_SAMPLING_BASE, help='Base for logarithmic sampling (default: 2.0)')
     args = parser.parse_args()
     
     # Auto-generate output path to match train.py expectations
@@ -43,9 +46,47 @@ def parse_args():
     
     return args
 
+def get_log_sample_indices(total_iters, base=2.0):
+    """
+    Generate logarithmically-spaced iteration indices.
+    
+    Returns indices like [0, 1, 2, 4, 8, 16, ...] up to total_iters-1.
+    Always includes iteration 0 (initial) and samples more densely at early iterations.
+    
+    Args:
+        total_iters: Total number of iterations available
+        base: Base for logarithmic spacing (default 2.0 gives powers of 2)
+        
+    Returns:
+        List of iteration indices to sample
+    """
+    if total_iters <= 0:
+        return []
+    
+    indices = set([0])  # Always include first iteration
+    
+    # Add powers of base: base^0=1, base^1, base^2, ...
+    power = 0
+    while True:
+        idx = int(base ** power)
+        if idx >= total_iters:
+            break
+        indices.add(idx)
+        power += 1
+    
+    # Always include last iteration if we have samples
+    if total_iters > 0:
+        indices.add(total_iters - 1)
+    
+    return sorted(indices)
+
+
 def harvest_single_run(solver, A, x_true, max_iters, rtol):
     """
-    Run PCG on a single synthetic problem and harvest the trajectory.
+    Run PCG on a single synthetic problem and harvest error vectors.
+    
+    Storage Optimization: Only error vectors are collected.
+    Residuals can be reconstructed on-the-fly via r = A @ e.
     
     Args:
         solver: PCG solver instance
@@ -55,7 +96,6 @@ def harvest_single_run(solver, A, x_true, max_iters, rtol):
         rtol: Relative tolerance
         
     Returns:
-        residuals: List of residual tensors (r_i) on same device as input
         errors: List of error tensors (e_i = x_true - x_i) on same device as input
     """
     with torch.no_grad():
@@ -69,7 +109,7 @@ def harvest_single_run(solver, A, x_true, max_iters, rtol):
             e_i = x_true - x_i
             errors.append(e_i)
     
-    return history_r, errors
+    return errors
 
 
 def main():
@@ -83,7 +123,6 @@ def main():
     n = A.shape[0]
 
     solver = PCG()
-    all_residuals = []
     all_errors = []
     total_samples = 0
 
@@ -93,37 +132,44 @@ def main():
     print(f"\nHarvesting trajectories from {args.num_runs} random problems...")
     print(f"Max iterations per run: {args.max_iters}")
     print(f"Convergence tolerance: {args.rtol}")
+    print(f"Storage optimization: Only saving error vectors (r computed on-the-fly)")
+    
+    if args.log_sampling:
+        print(f"Log sampling enabled with base {args.log_sampling_base}")
+        print(f"  (sampling iterations like 0, 1, 2, 4, 8, 16, ... to bias towards early iterations)")
+    elif args.skip_every > 1:
+        print(f"Skip every: {args.skip_every}")
     
     for run_idx in tqdm(range(args.num_runs), desc="Harvesting"):
         x_true = gen_x_randn(n).to(device)
-        residuals, errors = harvest_single_run(solver, A, x_true, args.max_iters, args.rtol)
+        errors = harvest_single_run(solver, A, x_true, args.max_iters, args.rtol)
         
-        if args.skip_every > 1:
-            residuals = residuals[::args.skip_every]
+        # Apply sampling strategy
+        if args.log_sampling:
+            # Logarithmic sampling: 0, 1, 2, 4, 8, 16, ...
+            sample_indices = get_log_sample_indices(len(errors), args.log_sampling_base)
+            errors = [errors[i] for i in sample_indices]
+        elif args.skip_every > 1:
+            # Linear skip sampling
             errors = errors[::args.skip_every]
         
-        for r, e in zip(residuals, errors):
-            all_residuals.append(r.cpu())
+        for e in errors:
             all_errors.append(e.cpu())
         
-        total_samples += len(residuals)
+        total_samples += len(errors)
     
     print(f"\nTotal samples collected: {total_samples}")
     
-    dataset_r = torch.stack(all_residuals, dim=0)  # Shape: (N_samples, n)
     dataset_e = torch.stack(all_errors, dim=0)      # Shape: (N_samples, n)
-    print(f"Dataset residuals shape: {dataset_r.shape}")
     print(f"Dataset errors shape: {dataset_e.shape}")
-    r_norms = torch.linalg.norm(dataset_r, dim=1)
     e_norms = torch.linalg.norm(dataset_e, dim=1)
-    print(f"\nResidual norms - mean: {r_norms.mean():.4e}, std: {r_norms.std():.4e}")
     print(f"Error norms - mean: {e_norms.mean():.4e}, std: {e_norms.std():.4e}")
     
     output_path = os.path.abspath(args.output)
     Path(os.path.dirname(output_path)).mkdir(parents=True, exist_ok=True)
     
+    # Storage optimization: only save errors, residuals computed on-the-fly as r = A @ e
     dataset = {
-        'r': dataset_r,
         'e': dataset_e,
         'metadata': {
             'problem': args.problem,
@@ -133,6 +179,8 @@ def main():
             'rtol': args.rtol,
             'total_samples': total_samples,
             'skip_every': args.skip_every,
+            'log_sampling': args.log_sampling,
+            'log_sampling_base': args.log_sampling_base if args.log_sampling else None,
             'seed': config.SEED
         }
     }

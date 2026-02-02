@@ -32,12 +32,16 @@ OFFLINE_DATASET_DIR = './data/pcg_harvested'  # Directory where harvested datase
 # Harvesting parameters (used when auto-generating dataset)
 HARVEST_DATASET_PATH = None  # Set to a specific .pt file path to reuse existing dataset, or None to auto-generate
 HARVEST_NUM_RUNS = 200     # Number of random PCG runs to harvest
-HARVEST_MAX_ITERS = 1000   # Max iterations per PCG run
+HARVEST_MAX_ITERS = 1024   # Max iterations per PCG run
 HARVEST_RTOL = 1e-10        # Convergence tolerance for harvesting
+
+# Log sampling: bias towards early iterations where residual changes are most informative
+LOG_SAMPLING = True        # Enable logarithmic iteration sampling
+LOG_SAMPLING_BASE = 2.0    # Base for log sampling (higher = more bias to early iterations)
 
 #==================SYSTEM/PATHS & ENVIRONMENT CONFIG==================#
 import os
-NUM_WORKERS = 0
+NUM_WORKERS = 8
 DEFAULT_DUMP_PATH = './dump/'
 SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', './data')
 
@@ -90,11 +94,18 @@ EXPERIMENTS = [
         'style': {'color': 'red', 'linestyle': '-', 'linewidth': 2}
     },
     {
-        'name': 'FCG (GNP)',
-        'solver': 'FCG',
-        'precond': 'GNP',
+        'name': 'PCG (AMG)',
+        'solver': 'PCG',
+        'precond': 'AMG',
         'precond_kwargs': {},
         'style': {'color': 'purple', 'linestyle': '-', 'linewidth': 2}
+    },
+    {
+        'name': 'PCG (MG-GNN)',
+        'solver': 'PCG',
+        'precond': 'MG-GNN',
+        'precond_kwargs': {'levels': 2, 'coarsening_ratio': 8},
+        'style': {'color': 'cyan', 'linestyle': '-', 'linewidth': 2}
     },
     # {
     #     'name': 'PCG (ILU)',
@@ -102,13 +113,6 @@ EXPERIMENTS = [
     #     'precond': 'ILU',
     #     'precond_kwargs': {},
     #     'style': {'color': 'purple', 'linestyle': '-', 'linewidth': 2}
-    # },
-    # {
-    #     'name': 'PCG (AMG)',
-    #     'solver': 'PCG',
-    #     'precond': 'AMG',
-    #     'precond_kwargs': {},
-    #     'style': {'color': 'brown', 'linestyle': '-', 'linewidth': 2}
     # },
 ]
 
