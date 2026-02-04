@@ -119,7 +119,7 @@ def main():
     device = torch.device(args.device)
 
     A = load_suitesparse(args.location, args.problem, device)
-    A = scale_A_by_spectral_radius(A)
+    # A = scale_A_by_spectral_radius(A)
     n = A.shape[0]
 
     solver = PCG()
@@ -141,7 +141,8 @@ def main():
         print(f"Skip every: {args.skip_every}")
     
     for run_idx in tqdm(range(args.num_runs), desc="Harvesting"):
-        x_true = gen_x_randn(n).to(device)
+        # x_true = gen_x_randn(n).to(device)
+        x_true = gen_x_randn(n).to(device).to(torch.float64)
         errors = harvest_single_run(solver, A, x_true, args.max_iters, args.rtol)
         
         # Apply sampling strategy

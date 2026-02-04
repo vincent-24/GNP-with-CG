@@ -26,8 +26,11 @@ temp/
 
 .ipynb_checkpoints/
 
+scripts/benchmark_acid_test.py
+
 Miniconda3-latest-Linux-x86_64.sh
 Miniforge3-Linux-aarch64.sh
 run_exp.sbatch
 run_exp.sh
+run_acid.sh
 ARCHITECTURE.md 

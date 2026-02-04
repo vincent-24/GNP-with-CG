@@ -341,6 +341,7 @@ class GNP():
     '''
 
     # log 5
+    '''
     def _compute_physics_loss(self, r_in, e_pred):
         e_pred_double = e_pred.to(torch.float64)
         Ae = self._matmul(self.A_torch, e_pred_double)
@@ -368,6 +369,17 @@ class GNP():
                         (torch.exp(-s2) * loss_2 + s2)
         
         return weighted_loss
+    '''
+
+    def _compute_supervised_loss(self, e_pred, e_true):
+        # Cast to float64 for precision
+        e_pred = e_pred.to(torch.float64)
+        e_true = e_true.to(torch.float64)
+        
+        # Standard MSE: L = || e_pred - e_true ||^2
+        # We assume e_true is the exact vector needed to solve Ax=b
+        loss = torch.nn.MSELoss()(e_pred, e_true)
+        return loss
 
     def train(self, train_loader, val_loader, epochs, optimizer, scheduler=None, 
               checkpoint_path=None, progress_bar=True):
@@ -411,16 +423,18 @@ class GNP():
                               miniters=train_miniters, mininterval=0)
             
             for batch_idx, (r_batch, e_batch) in enumerate(train_pbar):
-                # Move to device and transpose: (batch, n) -> (n, batch)
                 r_batch = r_batch.to(self.device).to(self.dtype)
+                e_batch = e_batch.to(self.device).to(self.dtype)
                 r_in = r_batch.T
+                e_true = e_batch.T
                 
                 # Forward pass
                 optimizer.zero_grad()
                 e_pred = self._scale_equivariant_forward(r_in)
                 
                 # Physics loss
-                loss = self._compute_physics_loss(r_in, e_pred)
+                # loss = self._compute_physics_loss(r_in, e_pred)
+                loss = self._compute_supervised_loss(e_pred, e_true)
                 
                 # Backward pass
                 loss.backward()
@@ -445,9 +459,12 @@ class GNP():
                 for r_batch, e_batch in val_loader:
                     r_batch = r_batch.to(self.device).to(self.dtype)
                     r_in = r_batch.T
+                    e_batch = e_batch.to(self.device).to(self.dtype)
+                    e_true = e_batch.T
                     
                     e_pred = self._scale_equivariant_forward(r_in)
-                    loss = self._compute_physics_loss(r_in, e_pred)
+                    # loss = self._compute_physics_loss(r_in, e_pred)
+                    loss = self._compute_supervised_loss(e_pred, e_true)
                     
                     epoch_val_losses.append(loss.item())
             
