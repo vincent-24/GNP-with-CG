@@ -6,4 +6,3 @@ from .GNP import *
 from .IChol import *
 from .ILU import *
 from .Jacobi import *
-from .MGGNN import MGGNNPreconditioner, MGGNNPreconditionerAdaptive

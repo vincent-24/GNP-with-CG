@@ -21,12 +21,11 @@ def get_solver_class(solver_name: str):
 
 
 def get_network_class(net_name: str):
-    from GNP.nn import ResGCN, SplitResGCN, MGGNN
+    from GNP.nn import ResGCN, SplitResGCN
     
     net_classes = {
         'ResGCN': ResGCN,
         'SplitResGCN': SplitResGCN,
-        'MGGNN': MGGNN,
     }
     
     if net_name not in net_classes:
