@@ -26,7 +26,7 @@ temp/
 
 .ipynb_checkpoints/
 
-scripts/benchmark_acid_test.py
+scripts/benchmark*
 
 Miniconda3-latest-Linux-x86_64.sh
 Miniforge3-Linux-aarch64.sh

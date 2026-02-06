@@ -35,7 +35,7 @@ LOG_SAMPLING_BASE = 2.0
 
 # ===========================SOLVER MATHEMATICAL SETTINGS===========================
 RESTART = 10
-MAX_ITERS = 2000
+MAX_ITERS = 100
 TOLERANCE = 1e-10
 
 LANCZOS_M = 80
@@ -90,8 +90,8 @@ EXPERIMENTS = [
         'style': {'color': 'red', 'linestyle': '-', 'linewidth': 2}
     },
     {
-        'name': 'PCG (AMG)',
-        'solver': 'PCG',
+        'name': 'GMRES (AMG)',
+        'solver': 'GMRES',
         'precond': 'AMG',
         'precond_kwargs': {},
         'style': {'color': 'purple', 'linestyle': '-', 'linewidth': 2}
