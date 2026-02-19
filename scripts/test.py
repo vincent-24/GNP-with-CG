@@ -1,10 +1,6 @@
-"""
-Evaluation routines: run experiments defined in config.EXPERIMENTS.
-"""
 import os
 import sys
 
-# Ensure GNP package is importable from any directory
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 if _PROJECT_ROOT not in sys.path:
@@ -103,11 +99,13 @@ def eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path=Non
     print(f"\n{'='*60}")
     print(f"{'Experiment':<30} {'Iters':>8} {'Final Res':>12}")
     print(f"{'='*60}")
+
     for name, res in results.items():
         if 'error' in res:
             print(f"{name:<30} {'ERROR':>8} {res['error'][:12]:>12}")
         else:
             print(f"{name:<30} {res['iters']:>8} {res['final_res']:>12.2e}")
+            
     print(f"{'='*60}")
     
     return results

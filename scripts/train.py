@@ -1,11 +1,5 @@
-"""
-Training routines for GNP neural preconditioner.
-Implements standard deep learning best practices:
-- Train/Validation split (90/10)
-- Proper epoch-based training (1 epoch = 1 full pass through training data)
-- Model checkpointing based on validation loss
-"""
 import os
+import gc
 import sys
 import json
 import torch
@@ -13,7 +7,6 @@ from pathlib import Path
 from tqdm import tqdm
 from torch.utils.data import DataLoader, random_split
 
-# Ensure GNP package is importable
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 if _PROJECT_ROOT not in sys.path:
@@ -27,110 +20,118 @@ from GNP.problems import gen_x_randn
 from scripts.utils import plot_learning_curve
 
 def harvest_pcg_dataset(A, b, device, args, run_id):
-    """
-    Harvest PCG trajectories to generate training data.
-    Runs unpreconditioned PCG on random RHS vectors and collects (r, e) pairs.
-    
-    Memory-efficient: saves incrementally to avoid OOM on large matrices.
-    """
-    print(f"\n[Harvest] Generating training data from {config.HARVEST_NUM_RUNS} CG runs.")
+    ratio = config.RANDOM_RATIO
+    print(f"\n[Harvest] Generating training data  "
+          f"(random_ratio={ratio:.2f}, {config.HARVEST_NUM_RUNS} PCG runs)")
     
     dataset_dir = config.OFFLINE_DATASET_DIR
     Path(dataset_dir).mkdir(parents=True, exist_ok=True)
-    filename = f'pcg_harvested_{args.problem.replace("/", "_")}_ID{run_id}.pt'
+    ratio_tag = f'r{ratio:.2f}'
+    filename = f'{ratio_tag}_harvested_{args.problem.replace("/", "_")}_ID{run_id}.pt'
     path = os.path.join(dataset_dir, filename)
-    
-    solver = PCG()
     n = A.shape[0]
-    
-    # Memory-efficient: save in chunks to avoid OOM on large matrices
-    # Storage optimization: only save errors (e), residuals computed on-the-fly
-    CHUNK_SIZE = 50  # Save every 50 PCG runs
-    all_e_chunks = []
-    chunk_e = []
-    total_samples = 0
-    
-    harvest_miniters = max(1, config.HARVEST_NUM_RUNS // 100)
-    
-    for i in tqdm(range(config.HARVEST_NUM_RUNS), desc="Harvesting", miniters=harvest_miniters, mininterval=0):
-        x_true = gen_x_randn(n).to(device).to(A.dtype)
-        b_sample = A @ x_true
-        
-        result = solver.solve(
-            A, b_sample, M=None, 
-            max_iters=config.HARVEST_MAX_ITERS, 
-            rtol=config.HARVEST_RTOL, 
-            progress_bar=False,
-            return_trajectory=True
-        )
-        
-        trajectory = result[-1] 
-        history_r, history_x = trajectory
-        
-        # Apply log sampling if enabled: only save iterations 0, 1, 2, 4, 8, 16, ...
-        # This biases towards early iterations where residual changes are most informative
-        if config.LOG_SAMPLING:
-            num_iters = len(history_x)
-            sample_indices = set([0])  # Always include first iteration
-            power = 0
-            while True:
-                idx = int(config.LOG_SAMPLING_BASE ** power)
-                if idx >= num_iters:
-                    break
-                sample_indices.add(idx)
-                power += 1
-            if num_iters > 0:
-                sample_indices.add(num_iters - 1)  # Always include last iteration
-            sample_indices = sorted(sample_indices)
-            
-            # Only save error vectors at sampled iterations
-            for idx in sample_indices:
-                e_k = x_true - history_x[idx]
-                chunk_e.append(e_k.cpu())
-        else:
-            # Save all iterations (original behavior)
-            for r_k, x_k in zip(history_r, history_x):
-                e_k = x_true - x_k
-                chunk_e.append(e_k.cpu())
-        
-        # Save chunk to disk periodically to free memory
-        if (i + 1) % CHUNK_SIZE == 0 and chunk_e:
+    CHUNK_SIZE = config.HARVEST_CHUNK_SIZE
+    all_e_chunks: list[torch.Tensor] = []
+    total_pcg = 0
+
+    if ratio < 1.0:
+        solver = PCG()
+        chunk_e: list[torch.Tensor] = []
+        harvest_miniters = max(1, config.HARVEST_NUM_RUNS // 100)
+
+        for i in tqdm(range(config.HARVEST_NUM_RUNS), desc="Harvesting PCG", miniters=harvest_miniters, mininterval=0):
+            x_true = gen_x_randn(n).to(device).to(A.dtype)
+            b_sample = A @ x_true
+
+            result = solver.solve(
+                A, b_sample, M=None,
+                max_iters=config.HARVEST_MAX_ITERS,
+                rtol=config.HARVEST_RTOL,
+                progress_bar=False,
+                return_trajectory=True,
+            )
+
+            trajectory = result[-1]
+            _, history_x = trajectory
+
+            if config.LOG_SAMPLING:
+                num_iters = len(history_x)
+                sample_indices = {0}
+                power = 0
+
+                while True:
+                    idx = int(config.LOG_SAMPLING_BASE ** power)
+
+                    if idx >= num_iters:
+                        break
+
+                    sample_indices.add(idx)
+                    power += 1
+
+                if num_iters > 0:
+                    sample_indices.add(num_iters - 1)
+
+                for idx in sorted(sample_indices):
+                    chunk_e.append((x_true - history_x[idx]).cpu())
+            else:
+                for x_k in history_x:
+                    chunk_e.append((x_true - x_k).cpu())
+
+            if (i + 1) % CHUNK_SIZE == 0 and chunk_e:
+                all_e_chunks.append(torch.stack(chunk_e))
+                total_pcg += len(chunk_e)
+                chunk_e = []
+                gc.collect()
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        if chunk_e:
             all_e_chunks.append(torch.stack(chunk_e))
-            total_samples += len(chunk_e)
-            chunk_e = []
-            import gc
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-    
-    if chunk_e:
-        all_e_chunks.append(torch.stack(chunk_e))
-        total_samples += len(chunk_e)
-    
-    # Storage optimization: only save errors, residuals computed on-the-fly
+            total_pcg += len(chunk_e)
+
+    total_random = 0
+
+    if ratio > 0.0:
+        if ratio == 1.0:
+            est_per_run = 20
+            num_random = config.HARVEST_NUM_RUNS * est_per_run
+        else:
+            num_random = int(total_pcg * ratio / (1.0 - ratio))
+
+        if num_random > 0:
+            print(f"[Harvest] Generating {num_random} white-noise vectors")
+            noise = torch.randn(num_random, n, dtype=torch.float64)
+            all_e_chunks.append(noise)
+            total_random = num_random
+
+    total_samples = total_pcg + total_random
+    dataset_e = torch.cat(all_e_chunks, dim=0)
+    rng = torch.Generator().manual_seed(config.SEED)
+    perm = torch.randperm(total_samples, generator=rng)
+    dataset_e = dataset_e[perm]
+
     dataset = {
-        'e': torch.cat(all_e_chunks, dim=0),
+        'e': dataset_e,
         'metadata': {
+            'random_ratio': ratio,
             'problem': args.problem,
             'num_runs': config.HARVEST_NUM_RUNS,
+            'num_pcg_samples': total_pcg,
+            'num_random_samples': total_random,
             'total_samples': total_samples,
             'log_sampling': config.LOG_SAMPLING,
-            'log_sampling_base': config.LOG_SAMPLING_BASE if config.LOG_SAMPLING else None
+            'log_sampling_base': config.LOG_SAMPLING_BASE if config.LOG_SAMPLING else None,
         }
     }
+
     torch.save(dataset, path)
-    print(f"[Harvest] Dataset saved to {path} ({total_samples} samples)")
+    print(f"[Harvest] Dataset saved to {path}  "
+          f"({total_samples} samples: {total_pcg} PCG + {total_random} random)")
+
     return path
 
 def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
-    """
-    Train the GNP neural preconditioner with proper train/val split.
-    
-    Implements:
-    - 90/10 train/validation split
-    - Epoch-based training (1 epoch = full pass through train set)
-    - Checkpointing based on validation loss (not train loss)
-    """
     solver_cls, cfg = get_solver_info(args.solver)
     net_cls = get_network_class(args.network_override) if args.network_override else get_network_class(cfg['default_net'])
     current_m = config.LANCZOS_M if cfg['use_lanczos'] else config.ARNOLDI_M
@@ -142,8 +143,12 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
         'hidden': config.HIDDEN_DIM,
         'drop_rate': config.DROP_RATE,
     }
+
     if net_cls.__name__ == 'SplitResGCN':
         net_kwargs['tie_weights'] = args.tie_weights
+    elif net_cls.__name__ == 'UNetGCN':
+        net_kwargs['num_levels'] = config.NUM_LEVELS
+        net_kwargs['layers_per_level'] = config.LAYERS_PER_LEVEL
     
     net = net_cls(**net_kwargs).to(device)
     
@@ -151,15 +156,9 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
     print(f"  Parameters: {sum(p.numel() for p in net.parameters()):,}")
     
     gnp = GNP(A, 'x_mix', current_m, net, device, use_lanczos=cfg['use_lanczos'])
-    # optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-4)
-    optimizer = torch.optim.Adam(
-        list(net.parameters()) + [gnp.loss_params],
-        lr=config.LEARNING_RATE, 
-        weight_decay=1e-4
-    )
-    
-    # Use command-line arg if provided, otherwise fall back to config, otherwise auto-generate
+    optimizer = torch.optim.Adam(list(net.parameters()) + [gnp.loss_params], lr=config.LEARNING_RATE, weight_decay=1e-4)
     harvest_path = getattr(args, 'harvest_dataset', None) or config.HARVEST_DATASET_PATH
+
     if harvest_path is not None:
         dataset_path = harvest_path
         print(f"Using specified dataset: {dataset_path}")
@@ -167,8 +166,6 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
         print(f"Generating new dataset with run ID {run_id}...")
         dataset_path = harvest_pcg_dataset(A, b, device, args, run_id)
     
-    # Pass A to OfflineDataset for on-the-fly residual computation (r = A @ e)
-    # A is kept on CPU within the dataset for multi-process DataLoader safety
     full_dataset = OfflineDataset(dataset_path, A=A)
     train_size = int(0.9 * len(full_dataset))
     val_size = len(full_dataset) - train_size
@@ -200,7 +197,7 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
     print(f"  Batch size: {config.BATCH_SIZE}")
     print(f"  Batches per epoch: {len(train_loader)}")
     
-    hist_train_loss, hist_val_loss, best_val_loss, best_epoch = gnp.train(
+    hist_train_loss, hist_val_loss, best_val_loss, best_epoch, step_data = gnp.train(
         train_loader=train_loader,
         val_loader=val_loader,
         epochs=config.EPOCHS,
@@ -211,6 +208,7 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
     )
     
     cfg_path = os.path.join(plot_dir, 'configs', f'master_{args.problem.replace("/", "_")}_ID{run_id}_config.json')
+
     train_cfg = {
         'run_id': run_id,
         'problem': args.problem,
@@ -244,6 +242,7 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
         },
         'harvest': {
             'dataset_path': dataset_path,
+            'random_ratio': config.RANDOM_RATIO,
             'num_runs': config.HARVEST_NUM_RUNS,
             'max_iters': config.HARVEST_MAX_ITERS,
             'rtol': config.HARVEST_RTOL,
@@ -257,6 +256,9 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
         json.dump(train_cfg, f, indent=2)
     
     plot_learning_curve(hist_train_loss, hist_val_loss, args, plot_dir, run_id, best_epoch=best_epoch)
+
+    from scripts.utils import plot_stepwise_learning_curve
+    plot_stepwise_learning_curve(step_data, args, plot_dir, run_id, best_epoch=best_epoch)
     
     print(f"\n{'='*60}")
     print(f"Training Complete!")

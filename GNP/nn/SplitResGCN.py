@@ -6,26 +6,18 @@ import numpy as np
 from GNP.utils import scale_A_by_spectral_radius
 from .layers import MLP, GCNConv
 
-#-----------------------------------------------------------------------------
-# SplitResGCN (Use for FCG / SPD Matrices)
 class SplitResGCN(nn.Module):
-    
-    def __init__(self, A, num_layers, embed, hidden, drop_rate,
-                 scale_input=True, dtype=torch.float32, tie_weights=False):
+    def __init__(self, A, num_layers, embed, hidden, drop_rate, scale_input=True, dtype=torch.float32, tie_weights=False):
         super().__init__()
         self.dtype = dtype
         self.scale_input = scale_input
         self.tie_weights = tie_weights
-        self.AA = scale_A_by_spectral_radius(A).to(dtype)
+        self.register_buffer('AA', scale_A_by_spectral_radius(A).to(dtype))
         self.embed = embed
-        
-        # Encoder (approximates L^T)
         self.enc_mlp = MLP(1, embed, 2, hidden, drop_rate)
         self.enc_gconv = nn.ModuleList()
         self.enc_skip = nn.ModuleList()   
         self.enc_bn = nn.ModuleList()
-        
-        # Decoder (approximates L)
         self.dec_bn = nn.ModuleList()
         
         if not tie_weights:
@@ -49,12 +41,10 @@ class SplitResGCN(nn.Module):
             
         self.dropout = nn.Dropout(drop_rate)
         
-        # Cast all parameters to target dtype for Float64 support
         if dtype == torch.float64:
             self._cast_to_float64()
 
     def _cast_to_float64(self):
-        """Cast all network parameters and buffers to float64."""
         for module in self.modules():
             if isinstance(module, (nn.Linear, nn.BatchNorm1d)):
                 module.weight.data = module.weight.data.double()
@@ -66,8 +56,6 @@ class SplitResGCN(nn.Module):
 
     def forward(self, r):
         n, batch_size = r.shape
-        
-        # Ensure input matches network dtype
         r = r.to(self.dtype)
         
         if self.scale_input:
@@ -84,9 +72,8 @@ class SplitResGCN(nn.Module):
             R = self.enc_bn[i](R)
             R = R.view(n, batch_size, -1)
             R = self.dropout(F.relu(R))
-            # R = self.dropout(R)
+            # R = self.dropout(R)   <- causing issues for some reason???
             
-        # --- DECODER (L) ---
         for i in range(self.half_layers):
             if self.tie_weights:
                 enc_idx = self.half_layers - 1 - i
@@ -106,11 +93,12 @@ class SplitResGCN(nn.Module):
             R = self.dec_bn[i](R)
             R = R.view(n, batch_size, -1)
             R = self.dropout(F.relu(R))
-            # R = self.dropout(R)
+            # R = self.dropout(R)   <- causing issues for some reason???
 
         z = self.dec_mlp(R)
         z = z.view(n, batch_size)
 
         if self.scale_input:
             z = z * scaling
+            
         return z

@@ -1,7 +1,3 @@
-"""
-Base class for solvers.
-Provides common initialization and utility methods.
-"""
 import time
 import torch
 import numpy as np
@@ -46,7 +42,6 @@ class IterativeSolver:
         return abs_res, rel_res
 
     def _record_direction(self, d):
-        """Record search direction for orthogonality heat map."""
         if not config.TRACK_ORTHOGONALITY:
             return
         
@@ -55,17 +50,10 @@ class IterativeSolver:
             self.search_directions.append(d.detach().cpu().clone())
 
     def _compute_orthogonality(self, A):
-        """Compute normalized A-orthogonality matrix of recorded search directions.
-        
-        Returns:
-            H: numpy array where H[i,j] = |d_i^T A d_j| / (||d_i||_A * ||d_j||_A)
-               Diagonal is 1.0, off-diagonal measures loss of A-conjugacy.
-               Returns None if no directions were recorded.
-        """
         if not config.TRACK_ORTHOGONALITY or len(self.search_directions) == 0:
             return None
         
-        D = torch.stack(self.search_directions, dim=1)  # Matrix D where columns are d_0, d_1...
+        D = torch.stack(self.search_directions, dim=1)  
         A_cpu = A.to('cpu')
         AD = A_cpu @ D                  # Matrix where columns are (A * d_j)
         M = torch.abs(D.T @ AD)         # Computes D^T * (A * D)

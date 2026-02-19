@@ -1,0 +1,40 @@
+{
+  "run_id": "47395",
+  "problem": "HB/plat1919",
+  "device": "cuda",
+  "seed": 42,
+  "solver": "PCG",
+  "tolerance": 1e-10,
+  "max_iters": 2000,
+  "fgmres_restart": 10,
+  "lanczos_m": 80,
+  "arnoldi_m": null,
+  "nn_architecture": {
+    "network": "SplitResGCN",
+    "num_layers": 8,
+    "embed_dim": 16,
+    "hidden_dim": 32,
+    "drop_rate": 0.0,
+    "tie_weights": true
+  },
+  "nn_training": {
+    "epochs": 5,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "train_samples": 180180,
+    "val_samples": 20020,
+    "best_val_loss": 0.19081749955100485,
+    "best_epoch": 1,
+    "final_train_loss": 0.19082469924861167,
+    "final_val_loss": 0.19177441661424013
+  },
+  "harvest": {
+    "dataset_path": "data/pcg_harvested/pcg_harvested_HB_plat1919.pt",
+    "num_runs": 200,
+    "max_iters": 1000,
+    "rtol": 1e-10,
+    "train_offline": true,
+    "offline_dataset_dir": "./data/pcg_harvested"
+  },
+  "checkpoint_path": "/u/vterrelonge/ComputationalIntelligenceLabs/GNP-with-CG/dump/02-04-2026/checkpoints/master_HB_plat1919_ID47395.pt"
+}

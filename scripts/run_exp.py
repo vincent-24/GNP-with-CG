@@ -15,17 +15,14 @@ from scripts.train import train_routine
 from scripts.test import eval_routine
 
 def get_device(args):
-    """Determine compute device."""
     if args.device:
         return torch.device(args.device)
-    
     if torch.cuda.is_available():
         return torch.device('cuda')
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         return torch.device('mps')
     else:
         return torch.device('cpu')
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -49,17 +46,15 @@ if __name__ == '__main__':
     print(f"Device: {device}")
     print(f"{'='*60}")
     
-    plot_dir, run_id = setup_experiment(args)   # sets seeds and creates output dirs
+    plot_dir, run_id = setup_experiment(args)   
     A, A_csc, b, x_gt = load_problem(args, device)
     master_ckpt_path = args.checkpoint
     
-    # Train GNP
     if args.mode in ('train', 'both'):
         print("\n\n\nTRAINING (GNP)")
         print(f"{'='*60}")
         master_ckpt_path = train_routine(A, b, x_gt, device, args, plot_dir, run_id)
     
-    # Eval
     if args.mode in ('eval', 'both'):
         if master_ckpt_path is None:
             print("\nWARNING: No checkpoint specified for evaluation.")

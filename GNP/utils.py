@@ -14,27 +14,24 @@ from ssgetpy import fetch
 # Return torch.sparse_csc_tensor in torch.float64 precision in device.
 # For the python interface of SuiteSparse, see https://github.com/drdarshan/ssgetpy
 def load_suitesparse(location, problem, device):
-    
     matrix = fetch(problem, format='MAT', dry_run=True)
     
     if len(matrix) != 0:
-        
         location = os.path.abspath(os.path.expanduser(location))
         group, name = problem.split('/')
         fetch(problem, format='MAT', location=os.path.join(location, group))[0]
+
         try:
             P = sio.loadmat(os.path.join(location, problem))
             A = P['Problem']['A'][0][0]
         except NotImplementedError:
             P = mat73.loadmat(os.path.join(location, problem + '.mat'))
             A = P['Problem']['A']
+
         del P
-        A = torch.sparse_csc_tensor(A.indptr, A.indices, A.data, A.shape,
-                                    dtype=torch.float64).to(device)
+        A = torch.sparse_csc_tensor(A.indptr, A.indices, A.data, A.shape, dtype=torch.float64).to(device)
         return A
-    
     else:
-        
         raise Exception(f'Unsupported problem {problem}!')
 
     

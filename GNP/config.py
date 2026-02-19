@@ -10,12 +10,16 @@ SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', './data')
 PROBLEM_PATH = None  
 
 # ============================NEURAL NETWORK ARCHITECTURE============================
-NETWORK_OVERRIDE = 'SplitResGCN'
+NETWORK_OVERRIDE = 'UNetGCN'  
 NUM_LAYERS = 8
 EMBED_DIM = 16
 HIDDEN_DIM = 32
 DROP_RATE = 0.0
 TIE_WEIGHTS = True
+
+# UNetGCN-specific (multigrid hierarchy)
+NUM_LEVELS = None          # None = auto (min(8, ceil(log2(n))))
+LAYERS_PER_LEVEL = 1       # GCN layers per resolution level
 
 BATCH_SIZE = 16
 EPOCHS = 5
@@ -24,18 +28,20 @@ LEARNING_RATE = 1e-3
 # ===============================DATASET & HARVESTING================================
 TRAIN_OFFLINE = True   # Set True to use pre-harvested data; False for streaming
 OFFLINE_DATASET_DIR = './data/pcg_harvested'
+RANDOM_RATIO = 0.0  # Fraction of dataset that is white-noise vectors (0.0 = pure PCG, 1.0 = pure noise)
 
 HARVEST_DATASET_PATH = None 
 HARVEST_NUM_RUNS = 200
 HARVEST_MAX_ITERS = 1000
 HARVEST_RTOL = 1e-10
+HARVEST_CHUNK_SIZE = 50  # Chunk size for memory-efficient harvesting
 
 LOG_SAMPLING = False
 LOG_SAMPLING_BASE = 2.0
 
 # ===========================SOLVER MATHEMATICAL SETTINGS===========================
 RESTART = 10
-MAX_ITERS = 100
+MAX_ITERS = 2000
 TOLERANCE = 1e-10
 
 LANCZOS_M = 80
@@ -56,7 +62,7 @@ SOLVER_CONFIG = {
     'FGMRES':         {'solver_cls': 'GMRES',          'use_lanczos': False, 'default_net': 'ResGCN'},
     'GMRES':          {'solver_cls': 'GMRES',          'use_lanczos': False, 'default_net': 'ResGCN'},
     'FCG':            {'solver_cls': 'FCG',            'use_lanczos': True,  'default_net': 'SplitResGCN'},
-    'PCG':            {'solver_cls': 'PCG',            'use_lanczos': True,  'default_net': 'SplitResGCN'},
+    'PCG':            {'solver_cls': 'PCG',            'use_lanczos': True,  'default_net': 'UNetGCN'},
     'PolakRibiereCG': {'solver_cls': 'PolakRibiereCG', 'use_lanczos': True,  'default_net': 'SplitResGCN'},
 }
 
