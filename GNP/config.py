@@ -5,30 +5,65 @@ SEED = 42
 NUM_WORKERS = 8
 MODE = 'both'  # Options: 'train', 'eval', 'both'
 
-DEFAULT_DUMP_PATH = './dump/'
-SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', './data')
+DEFAULT_DUMP_PATH = '/work/hdd/bdyf/vterrelonge/GNP-with-CG/dump/'
+DEFAULT_LOG_PATH = '/work/hdd/bdyf/vterrelonge/GNP-with-CG/logs/'
+SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', '/work/hdd/bdyf/vterrelonge/GNP-with-CG/data/SuiteSparse')
 PROBLEM_PATH = None  
 
 # ============================NEURAL NETWORK ARCHITECTURE============================
-NETWORK_OVERRIDE = 'UNetGCN'  
+NETWORK_OVERRIDE = 'MGGNN'  
 NUM_LAYERS = 8
 EMBED_DIM = 16
 HIDDEN_DIM = 32
 DROP_RATE = 0.0
 TIE_WEIGHTS = True
 
-# UNetGCN-specific (multigrid hierarchy)
+# UNetGCN / MGGNN multigrid hierarchy
 NUM_LEVELS = None          # None = auto (min(8, ceil(log2(n))))
-LAYERS_PER_LEVEL = 1       # GCN layers per resolution level
+LAYERS_PER_LEVEL = 2       # GCN layers per resolution level
+
+# MGGNN-specific (parallel multi-scale architecture)
+NUM_BLOCKS = 4             # Number of stacked MG-GNN blocks
+TAGCONV_K = 3              # TAGConv polynomial order (K-hop neighbourhood)
+CROSS_LEVEL_WIDTH = 128    # Paper: 2 FC layers of size 128 for inter-level MLPs
+NUM_V_CYCLES = 2           # Legacy — kept for checkpoint compat
+
+# ---- MGGNN v2: Neural Multigrid Generator features ----
+# Phase 1 — Differentiable coarsening (MinCutPool-style learned topology)
+LEARNED_COARSENING = False
+LAMBDA_CUT = 1.0           # Weight for MinCut loss  -Tr(S^T A S)/Tr(S^T D S)
+LAMBDA_ORTH = 1.0          # Weight for orthogonality loss ||S^T S/n - I/k||_F
+
+# Phase 2 — Petrov-Galerkin asymmetric projection (R ≠ P^T)
+PETROV_GALERKIN = False
+LAMBDA_SYM = 0.1           # Soft symmetry penalty ||R - P^T||_F^2 (SPD mode)
+
+# Phase 3 — Anisotropic message passing (GATv2 attention)
+USE_ATTENTION = False
+NUM_ATTENTION_HEADS = 4
+
+# Phase 4 — Learned Neural Smoother (per-node Jacobi damping)
+USE_NEURAL_SMOOTHER = False
+NUM_SMOOTH_STEPS = 1       # Number of pre/post-smooth Jacobi iterations
+SYMMETRIC_SMOOTH = True    # Apply post-smooth too (preserves SPD for PCG)
+
+# FNO-specific (Fourier Neural Operator)
+FNO_MODES = 16             # Fourier modes to keep per spatial dimension
+FNO_GRID_SIZE = 64         # Resolution of the regular 2-D interpolation grid
 
 BATCH_SIZE = 16
 EPOCHS = 5
 LEARNING_RATE = 1e-3
 
+# Spectral radius loss (unsupervised training)
+SPECTRAL_NUM_VECTORS = 32      # Random probe vectors per optimizer step
+SPECTRAL_POWER_ITERS = 10      # Power iteration depth for rho estimation
+SPECTRAL_STEPS_PER_EPOCH = 50  # Optimizer steps per epoch (no DataLoader)
+
 # ===============================DATASET & HARVESTING================================
 TRAIN_OFFLINE = True   # Set True to use pre-harvested data; False for streaming
-OFFLINE_DATASET_DIR = './data/pcg_harvested'
-RANDOM_RATIO = 0.0  # Fraction of dataset that is white-noise vectors (0.0 = pure PCG, 1.0 = pure noise)
+OFFLINE_DATASET_DIR = '/work/hdd/bdyf/vterrelonge/GNP-with-CG/data/pcg_harvested'
+RANDOM_RATIO = 1.0  # Fraction of dataset that is white-noise vectors (0.0 = pure PCG, 1.0 = pure noise/spectral training)
 
 HARVEST_DATASET_PATH = None 
 HARVEST_NUM_RUNS = 200
@@ -66,16 +101,22 @@ SOLVER_CONFIG = {
     'PolakRibiereCG': {'solver_cls': 'PolakRibiereCG', 'use_lanczos': True,  'default_net': 'SplitResGCN'},
 }
 
+def _get_arch_label():
+    """Derive a short display label from NETWORK_OVERRIDE for experiment names."""
+    return NETWORK_OVERRIDE if NETWORK_OVERRIDE else 'GNP'
+
+_ARCH_LABEL = _get_arch_label()
+
 EXPERIMENTS = [
     {
-        'name': 'FGMRES (GNP)',
+        'name': f'FGMRES ({_ARCH_LABEL})',
         'solver': 'FGMRES',
         'precond': 'GNP',
         'precond_kwargs': {},
         'style': {'color': 'blue', 'linestyle': '-', 'linewidth': 2}
     },
     {
-        'name': 'PCG (GNP)',
+        'name': f'PCG ({_ARCH_LABEL})',
         'solver': 'PCG',
         'precond': 'GNP',
         'precond_kwargs': {},

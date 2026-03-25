@@ -5,8 +5,8 @@ from tqdm import tqdm
 from GNP import config
 
 class IterativeSolver:
-    def _prepare_solve(self, b, x0, max_iters, desc, progress_bar=True):
-        x = torch.zeros_like(b) if x0 is None else x0.clone()
+    def _prepare_solve(self, b, max_iters, desc, progress_bar=True):
+        x = torch.zeros_like(b)     # <- x0
         norm_b = torch.linalg.norm(b)
 
         if norm_b == 0: norm_b = 1.0
@@ -26,11 +26,10 @@ class IterativeSolver:
 
     def _apply_M(self, M, r):
         if M is not None: return M.apply(r)
-        return r.clone()
+        return r.clone()    # <- runs without preconditioner, so M = I
 
     def _update_history(self, r, norm_b, tic, history_tuple, energy_val=None):
         hist_abs, hist_rel, hist_energy, hist_time = history_tuple
-    
         abs_res = torch.linalg.norm(r)
         rel_res = abs_res / norm_b
         hist_abs.append(abs_res.item())

@@ -4,7 +4,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-build/
+build*/
 dist/
 *.egg*
 
@@ -31,13 +31,16 @@ scripts/overfit_diagnostic.py
 Miniconda3-latest-Linux-x86_64.sh
 Miniforge3-Linux-aarch64.sh
 run_exp.sbatch
-run_exp.sh
-run_acid.sh
-run_vram.sh
-run_diagnostic.sh
+run_*.sh
 
 ARCHITECTURE.md 
 INFO.md
 INSTRUCTIONS.md
+MGGNN_Analysis.md
+results.txt
+
+GNP/nn/FNO.py
+GNP/solver/DeflatedCG.py
+scripts/pretrain_mggnn.py
 
 overfit_diagnostic.png

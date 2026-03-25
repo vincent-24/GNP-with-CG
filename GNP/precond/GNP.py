@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import IterableDataset, Dataset
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
+from GNP import config
 
 class OfflineDataset(Dataset):
     def __init__(self, dataset_path, A=None):
@@ -93,14 +94,11 @@ class OfflineDataset(Dataset):
         return r, e
 
 class GNP():
-    def __init__(self, A, training_data, m, net, device, use_lanczos=False):
+    def __init__(self, A, net, device):
         self.A = A
-        self.training_data = training_data
-        self.m = m
         self.net = net
         self.device = device
         self.dtype = net.dtype
-        self.use_lanczos = use_lanczos
         self.n = A.shape[0]
         self.A_torch = None
         self.loss_params = torch.nn.Parameter(torch.zeros(2, device=device))
@@ -110,7 +108,11 @@ class GNP():
             return
 
         if torch.is_tensor(self.A):
-            self.A_torch = self.A.to(torch.float64).to(self.device)
+            # Convert CSC/CSR to COO for better CUDA compatibility
+            if self.A.layout in (torch.sparse_csc, torch.sparse_csr):
+                self.A_torch = self.A.to_sparse_coo().coalesce().to(torch.float64).to(self.device)
+            else:
+                self.A_torch = self.A.to(torch.float64).to(self.device)
         elif sp.issparse(self.A):
             coo = self.A.tocoo()
             indices = torch.from_numpy(np.vstack((coo.row, coo.col))).long()
@@ -122,27 +124,145 @@ class GNP():
             self.A_torch = torch.tensor(self.A, dtype=torch.float64).to(self.device)
 
     def _matmul(self, A, x):
-        if A.is_sparse:
+        # Check for any sparse layout (COO returns is_sparse=True, CSC/CSR need layout check)
+        if A.is_sparse or A.layout in (torch.sparse_coo, torch.sparse_csr, torch.sparse_csc):
             return torch.sparse.mm(A, x)
         else:
             return torch.matmul(A, x)
 
     def _scale_equivariant_forward(self, b):
+        input_dtype = b.dtype
         norms = torch.linalg.norm(b, dim=0, keepdim=True)
         norms = norms.clamp(min=1e-12)
         scaling_factor = math.sqrt(self.n) / norms
         b_scaled = b * scaling_factor
         x_scaled = self.net(b_scaled)
         x = x_scaled / scaling_factor
-
-        return x
+        # Cast back to input dtype to avoid mismatches with A_torch (float64)
+        return x.to(input_dtype)
 
     def _compute_supervised_loss(self, e_pred, e_true):
         e_pred = e_pred.to(torch.float64)
         e_true = e_true.to(torch.float64)
         loss = torch.nn.MSELoss()(e_pred, e_true)
-        
+
         return loss
+
+    def _compute_spectral_radius_loss(self, num_vectors=32, power_iters=10):
+        """Estimate rho(I - M^{-1}A) via power iteration and minimise it.
+
+        Only the **last** power iteration builds a computational graph;
+        all preceding iterations run under ``torch.no_grad()`` so that
+        VRAM usage equals a single forward pass regardless of
+        ``power_iters``.
+
+        Returns
+        -------
+        rho : torch.Tensor  (scalar, differentiable)
+            Estimated spectral radius of the error propagation operator.
+        """
+        n = self.n
+        # Sample random unit vectors: (n, num_vectors) - use A's dtype for consistency
+        v = torch.randn(n, num_vectors, dtype=self.A_torch.dtype, device=self.device)
+        v = v / torch.linalg.norm(v, dim=0, keepdim=True).clamp(min=1e-12)
+
+        # --- Detached inner iterations (no autograd graph) ---
+        with torch.no_grad():
+            for _ in range(power_iters - 1):
+                Av = self._matmul(self.A_torch, v)
+                M_inv_Av = self._scale_equivariant_forward(Av)
+                Ev = v - M_inv_Av
+                norms = torch.linalg.norm(Ev, dim=0, keepdim=True).clamp(min=1e-12)
+                v = Ev / norms
+
+        # --- Final iteration WITH gradients ---
+        Av = self._matmul(self.A_torch, v)
+        M_inv_Av = self._scale_equivariant_forward(Av)
+        Ev = v - M_inv_Av
+
+        # Rayleigh-quotient estimate per probe vector:  rho_i = ||E v_i|| / ||v_i||
+        # v_i are unit-norm so this simplifies to ||E v_i||
+        rho_estimates = torch.linalg.norm(Ev, dim=0)  # (num_vectors,)
+        rho = rho_estimates.mean()
+
+        return rho
+
+    def train_spectral(self, epochs, optimizer, scheduler=None,
+                       checkpoint_path=None, num_vectors=32,
+                       power_iters=10, steps_per_epoch=50,
+                       progress_bar=True):
+        """Train the preconditioner by minimising spectral radius rho(I - M^{-1}A).
+
+        No harvested data is needed.  Random probe vectors are sampled
+        each step and the spectral radius is estimated via power iteration.
+
+        Returns
+        -------
+        hist_train_loss : list[float]
+        best_loss : float
+        best_epoch : int
+        """
+        self._prepare_A_torch()
+        hist_train_loss = []
+        best_loss = float('inf')
+        best_epoch = -1
+
+        print(f"Starting spectral radius training: {epochs} epochs, "
+              f"{steps_per_epoch} steps/epoch, "
+              f"{num_vectors} vectors, {power_iters} power iters")
+
+        for epoch in range(epochs):
+            self.net.train()
+            epoch_losses = []
+
+            pbar = tqdm(range(steps_per_epoch),
+                        desc=f"Epoch {epoch+1}/{epochs}",
+                        leave=False, disable=not progress_bar)
+
+            for step in pbar:
+                optimizer.zero_grad()
+                rho = self._compute_spectral_radius_loss(
+                    num_vectors=num_vectors,
+                    power_iters=power_iters,
+                )
+
+                loss = rho
+                # Add auxiliary losses from MGGNN v2 features
+                if hasattr(self.net, 'get_aux_losses'):
+                    aux = self.net.get_aux_losses()
+                    if 'L_cut' in aux:
+                        loss = loss + config.LAMBDA_CUT * aux['L_cut']
+                    if 'L_orth' in aux:
+                        loss = loss + config.LAMBDA_ORTH * aux['L_orth']
+                    if 'L_sym' in aux:
+                        loss = loss + config.LAMBDA_SYM * aux['L_sym']
+
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=1.0)
+                optimizer.step()
+
+                epoch_losses.append(rho.item())
+                pbar.set_postfix({'rho': f'{rho.item():.4f}'})
+
+            if scheduler is not None:
+                scheduler.step()
+
+            avg_loss = np.mean(epoch_losses)
+            hist_train_loss.append(avg_loss)
+            improved = avg_loss < best_loss
+
+            if improved:
+                best_loss = avg_loss
+                best_epoch = epoch + 1
+                if checkpoint_path is not None:
+                    torch.save(self.net.state_dict(), checkpoint_path)
+
+            status = " (saved)" if improved else ""
+            print(f"Epoch {epoch+1:3d}/{epochs} | "
+                  f"rho: {avg_loss:.6f}{status}")
+
+        print(f"\nBest spectral radius: {best_loss:.6f} at epoch {best_epoch}")
+        return hist_train_loss, best_loss, best_epoch
 
     def train(self, train_loader, val_loader, epochs, optimizer, scheduler=None, checkpoint_path=None, progress_bar=True):
         self._prepare_A_torch()
@@ -175,6 +295,16 @@ class GNP():
                 e_pred = self._scale_equivariant_forward(r_in)
                 loss = self._compute_supervised_loss(e_pred, e_true)
                 
+                # Add auxiliary regularisation losses from MGGNN v2 features
+                if hasattr(self.net, 'get_aux_losses'):
+                    aux = self.net.get_aux_losses()
+                    if 'L_cut' in aux:
+                        loss = loss + config.LAMBDA_CUT * aux['L_cut']
+                    if 'L_orth' in aux:
+                        loss = loss + config.LAMBDA_ORTH * aux['L_orth']
+                    if 'L_sym' in aux:
+                        loss = loss + config.LAMBDA_SYM * aux['L_sym']
+
                 loss.backward()
                 optimizer.step()
                 
@@ -241,4 +371,5 @@ class GNP():
         z_out = self._scale_equivariant_forward(r_in)
         z = z_out.view(-1)
         z = z.double()
+        
         return z

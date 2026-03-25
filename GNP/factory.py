@@ -21,17 +21,26 @@ def get_solver_class(solver_name: str):
 
 
 def get_network_class(net_name: str):
-    from GNP.nn import ResGCN, SplitResGCN, UNetGCN
-    
+    from GNP.nn import ResGCN, SplitResGCN, UNetGCN, MGGNN
+
     net_classes = {
         'ResGCN': ResGCN,
         'SplitResGCN': SplitResGCN,
         'UNetGCN': UNetGCN,
+        'MGGNN': MGGNN,
     }
-    
+
+    # FNO is optional
+    try:
+        from GNP.nn import FNO
+        if FNO is not None:
+            net_classes['FNO'] = FNO
+    except (ImportError, AttributeError):
+        pass
+
     if net_name not in net_classes:
         raise ValueError(f"Unknown network: {net_name}. Available: {list(net_classes.keys())}")
-    
+
     return net_classes[net_name]
 
 
