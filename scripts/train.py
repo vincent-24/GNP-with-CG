@@ -24,11 +24,11 @@ def _use_spectral_training(network_name: str) -> bool:
     """
     Determine whether to use unsupervised spectral radius training.
 
-    Returns True for MGGNN/UNetGCN if RANDOM_RATIO >= 1.0 (pure noise mode)
+    Returns True for MGGNN/UNetGCN/LinearMGGNN if RANDOM_RATIO >= 1.0 (pure noise mode)
     or if explicitly configured. Supervised training is default otherwise.
     """
     # Networks that support unsupervised spectral training
-    spectral_networks = {'MGGNN', 'UNetGCN'}
+    spectral_networks = {'MGGNN', 'UNetGCN', 'LinearMGGNN'}
 
     if network_name not in spectral_networks:
         return False
@@ -150,7 +150,7 @@ def harvest_pcg_dataset(A, b, device, args, run_id):
 
 def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
     solver_class, cfg = get_solver_info(args.solver)
-    newtwork_class = get_network_class(args.network_override) if args.network_override else get_network_class(cfg['default_net'])
+    network_class = get_network_class(args.network_override) if args.network_override else get_network_class(cfg['default_net'])
 
     net_kwargs = {
         'A': A,
@@ -160,33 +160,32 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
         'drop_rate': config.DROP_RATE,
     }
 
-    if newtwork_class.__name__ == 'SplitResGCN':
+    if network_class.__name__ == 'SplitResGCN':
         net_kwargs['tie_weights'] = args.tie_weights
-    elif newtwork_class.__name__ == 'UNetGCN':
+    elif network_class.__name__ == 'UNetGCN':
         net_kwargs['num_levels'] = config.NUM_LEVELS
         net_kwargs['layers_per_level'] = config.LAYERS_PER_LEVEL
-    elif newtwork_class.__name__ == 'MGGNN':
+    elif network_class.__name__ in ('MGGNN', 'LinearMGGNN'):
         net_kwargs['num_levels'] = config.NUM_LEVELS
-        net_kwargs['num_blocks'] = config.NUM_BLOCKS
-        net_kwargs['K'] = config.TAGCONV_K
-    elif newtwork_class.__name__ == 'FNO':
-        net_kwargs['modes'] = config.FNO_MODES
-        net_kwargs['grid_size'] = config.FNO_GRID_SIZE
+        net_kwargs['num_vcycles'] = config.LINEAR_MGGNN_NUM_VCYCLES
+        net_kwargs['smoother_K'] = config.LINEAR_MGGNN_SMOOTHER_K
+        net_kwargs['coarsest_K'] = config.LINEAR_MGGNN_COARSEST_K
+        net_kwargs['share_smoothers'] = config.LINEAR_MGGNN_SHARE_SMOOTHERS
 
-    net = newtwork_class(**net_kwargs).to(device)
+    net = network_class(**net_kwargs).to(device)
 
-    print(f"\nNetwork: {newtwork_class.__name__}")
+    print(f"\nNetwork: {network_class.__name__}")
     print(f"  Parameters: {sum(p.numel() for p in net.parameters()):,}")
 
     gnp = GNP(A, net, device)
-    optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(net.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
 
     # Store checkpoint and config directly in matrix-specific directory
     master_ckpt_path = os.path.join(plot_dir, f'master_{args.problem.replace("/", "_")}_ID{run_id}.pt')
     cfg_path = os.path.join(plot_dir, f'master_{args.problem.replace("/", "_")}_ID{run_id}_config.json')
 
     # Determine training mode
-    use_spectral = _use_spectral_training(newtwork_class.__name__)
+    use_spectral = _use_spectral_training(network_class.__name__)
 
     if use_spectral:
         # ===== UNSUPERVISED SPECTRAL RADIUS TRAINING =====
@@ -222,14 +221,14 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
             'arnoldi_m': config.ARNOLDI_M if not cfg['use_lanczos'] else None,
 
             'nn_architecture': {
-                'network': newtwork_class.__name__,
+                'network': network_class.__name__,
                 'num_layers': config.NUM_LAYERS,
                 'embed_dim': config.EMBED_DIM,
                 'hidden_dim': config.HIDDEN_DIM,
                 'drop_rate': config.DROP_RATE,
-                'num_levels': config.NUM_LEVELS if newtwork_class.__name__ in ['MGGNN', 'UNetGCN'] else None,
-                'num_blocks': config.NUM_BLOCKS if newtwork_class.__name__ == 'MGGNN' else None,
-                'tagconv_k': config.TAGCONV_K if newtwork_class.__name__ == 'MGGNN' else None,
+                'num_levels': config.NUM_LEVELS if network_class.__name__ in ['MGGNN', 'UNetGCN'] else None,
+                'num_blocks': config.NUM_BLOCKS if network_class.__name__ == 'MGGNN' else None,
+                'tagconv_k': config.TAGCONV_K if network_class.__name__ == 'MGGNN' else None,
             },
             'nn_training': {
                 'mode': 'spectral',
@@ -271,7 +270,7 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
             dataset_path = harvest_pcg_dataset(A, b, device, args, run_id)
 
         full_dataset = OfflineDataset(dataset_path, A=A)
-        train_size = int(0.9 * len(full_dataset))
+        train_size = int(config.TRAIN_VAL_SPLIT * len(full_dataset))
         val_size = len(full_dataset) - train_size
         generator = torch.Generator().manual_seed(config.SEED)
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size], generator=generator)
@@ -322,12 +321,12 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
             'arnoldi_m': config.ARNOLDI_M if not cfg['use_lanczos'] else None,
 
             'nn_architecture': {
-                'network': newtwork_class.__name__,
+                'network': network_class.__name__,
                 'num_layers': config.NUM_LAYERS,
                 'embed_dim': config.EMBED_DIM,
                 'hidden_dim': config.HIDDEN_DIM,
                 'drop_rate': config.DROP_RATE,
-                'tie_weights': args.tie_weights if newtwork_class.__name__ == 'SplitResGCN' else None,
+                'tie_weights': args.tie_weights if network_class.__name__ == 'SplitResGCN' else None,
             },
             'nn_training': {
                 'mode': 'supervised',

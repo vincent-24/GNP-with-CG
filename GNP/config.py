@@ -5,13 +5,13 @@ SEED = 42
 NUM_WORKERS = 8
 MODE = 'both'  # Options: 'train', 'eval', 'both'
 
-DEFAULT_DUMP_PATH = '/work/hdd/bdyf/vterrelonge/GNP-with-CG/dump/'
-DEFAULT_LOG_PATH = '/work/hdd/bdyf/vterrelonge/GNP-with-CG/logs/'
-SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', '/work/hdd/bdyf/vterrelonge/GNP-with-CG/data/SuiteSparse')
+DEFAULT_DUMP_PATH = './dump/'
+SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', './data/SuiteSparse')
+CHECKPOINT_PATH = os.getenv('GNP_CHECKPOINT_PATH', './checkpoints')
 PROBLEM_PATH = None  
 
 # ============================NEURAL NETWORK ARCHITECTURE============================
-NETWORK_OVERRIDE = 'MGGNN'  
+NETWORK_OVERRIDE = 'LinearMGGNN'  
 NUM_LAYERS = 8
 EMBED_DIM = 16
 HIDDEN_DIM = 32
@@ -27,6 +27,12 @@ NUM_BLOCKS = 4             # Number of stacked MG-GNN blocks
 TAGCONV_K = 3              # TAGConv polynomial order (K-hop neighbourhood)
 CROSS_LEVEL_WIDTH = 128    # Paper: 2 FC layers of size 128 for inter-level MLPs
 NUM_V_CYCLES = 2           # Legacy — kept for checkpoint compat
+
+# LinearMGGNN-specific (strictly linear V-cycle for standard PCG compatibility)
+LINEAR_MGGNN_NUM_VCYCLES = 2       # Number of V-cycles per forward pass
+LINEAR_MGGNN_SMOOTHER_K = 3        # Polynomial degree for Chebyshev-like smoother
+LINEAR_MGGNN_COARSEST_K = 5        # Polynomial degree for coarsest level solve
+LINEAR_MGGNN_SHARE_SMOOTHERS = True  # Share pre/post smoothers (ensures symmetric operator)
 
 # ---- MGGNN v2: Neural Multigrid Generator features ----
 # Phase 1 — Differentiable coarsening (MinCutPool-style learned topology)
@@ -47,13 +53,12 @@ USE_NEURAL_SMOOTHER = False
 NUM_SMOOTH_STEPS = 1       # Number of pre/post-smooth Jacobi iterations
 SYMMETRIC_SMOOTH = True    # Apply post-smooth too (preserves SPD for PCG)
 
-# FNO-specific (Fourier Neural Operator)
-FNO_MODES = 16             # Fourier modes to keep per spatial dimension
-FNO_GRID_SIZE = 64         # Resolution of the regular 2-D interpolation grid
-
 BATCH_SIZE = 16
 EPOCHS = 5
 LEARNING_RATE = 1e-3
+WEIGHT_DECAY = 1e-4                # Adam weight decay regularization
+TRAIN_VAL_SPLIT = 0.9              # Fraction of data for training (rest for validation)
+GRAD_CLIP_NORM = 1.0               # Maximum gradient norm for clipping
 
 # Spectral radius loss (unsupervised training)
 SPECTRAL_NUM_VECTORS = 32      # Random probe vectors per optimizer step
@@ -62,8 +67,8 @@ SPECTRAL_STEPS_PER_EPOCH = 50  # Optimizer steps per epoch (no DataLoader)
 
 # ===============================DATASET & HARVESTING================================
 TRAIN_OFFLINE = True   # Set True to use pre-harvested data; False for streaming
-OFFLINE_DATASET_DIR = '/work/hdd/bdyf/vterrelonge/GNP-with-CG/data/pcg_harvested'
-RANDOM_RATIO = 1.0  # Fraction of dataset that is white-noise vectors (0.0 = pure PCG, 1.0 = pure noise/spectral training)
+OFFLINE_DATASET_DIR = './data/pcg_harvested'
+RANDOM_RATIO = 0.0  # Fraction of dataset that is white-noise vectors (0.0 = pure PCG, 1.0 = pure noise)
 
 HARVEST_DATASET_PATH = None 
 HARVEST_NUM_RUNS = 200
@@ -73,7 +78,7 @@ HARVEST_CHUNK_SIZE = 50  # Chunk size for memory-efficient harvesting
 
 LOG_SAMPLING = False
 LOG_SAMPLING_BASE = 2.0
-
+    
 # ===========================SOLVER MATHEMATICAL SETTINGS===========================
 RESTART = 10
 MAX_ITERS = 2000

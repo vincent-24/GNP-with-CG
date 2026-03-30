@@ -3,6 +3,24 @@ from torch import nn
 import torch.nn.functional as F
 
 
+def cast_module_to_float64(module: nn.Module) -> None:
+    """Recursively cast all parameters and buffers to float64.
+
+    This is needed for numerical precision in iterative solvers.
+    Call this on a network after construction to ensure float64 computation.
+    """
+    for child in module.modules():
+        if isinstance(child, (nn.Linear, nn.BatchNorm1d, nn.LayerNorm)):
+            child.weight.data = child.weight.data.double()
+            if child.bias is not None:
+                child.bias.data = child.bias.data.double()
+        if isinstance(child, nn.BatchNorm1d):
+            if child.running_mean is not None:
+                child.running_mean = child.running_mean.double()
+            if child.running_var is not None:
+                child.running_var = child.running_var.double()
+
+
 def scatter_add(
     src: torch.Tensor,
     index: torch.LongTensor,

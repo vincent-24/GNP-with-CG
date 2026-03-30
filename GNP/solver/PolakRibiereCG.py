@@ -42,7 +42,7 @@ class PolakRibiereCG(IterativeSolver):
             q = A @ d
             dAq = torch.dot(d, q)
             
-            if dAq <= 1e-15: break
+            if abs(dAq) <= 1e-15: break  # Breakdown safety (use abs for non-SPD preconditioners)
                 
             alpha = delta_rz / dAq
             x = x + alpha * d

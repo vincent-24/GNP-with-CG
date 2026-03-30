@@ -238,7 +238,7 @@ class GNP():
                         loss = loss + config.LAMBDA_SYM * aux['L_sym']
 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=config.GRAD_CLIP_NORM)
                 optimizer.step()
 
                 epoch_losses.append(rho.item())

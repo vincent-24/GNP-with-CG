@@ -7,10 +7,8 @@ from .base import IterativeSolver
 from GNP import config
 
 class PCG(IterativeSolver):
-    def solve(self, A, b, M=None, x0=None, max_iters=100, rtol=1e-8, progress_bar=True, return_trajectory=False): 
-        x, norm_b, hists, tic, progress_bar = self._prepare_solve(b, max_iters, 'PCG Solve', progress_bar)
-        if x0 is not None:
-            x = x0.clone()
+    def solve(self, A, b, M=None, x0=None, max_iters=100, rtol=1e-8, progress_bar=True, return_trajectory=False):
+        x, norm_b, hists, tic, progress_bar = self._prepare_solve(b, x0, max_iters, 'PCG Solve', progress_bar)
         hist_abs, hist_rel, hist_energy, hist_time = hists
         history_x = []
 

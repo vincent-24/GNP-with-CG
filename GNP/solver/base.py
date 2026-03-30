@@ -5,8 +5,8 @@ from tqdm import tqdm
 from GNP import config
 
 class IterativeSolver:
-    def _prepare_solve(self, b, max_iters, desc, progress_bar=True):
-        x = torch.zeros_like(b)     # <- x0
+    def _prepare_solve(self, b, x0, max_iters, desc, progress_bar=True):
+        x = x0.clone() if x0 is not None else torch.zeros_like(b)
         norm_b = torch.linalg.norm(b)
 
         if norm_b == 0: norm_b = 1.0

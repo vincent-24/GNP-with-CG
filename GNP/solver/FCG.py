@@ -52,7 +52,7 @@ class FCG(IterativeSolver):
             q = A @ d
             d_Aq = torch.dot(d, q)
             
-            if d_Aq <= 1e-15: break # Breakdown safety
+            if abs(d_Aq) <= 1e-15: break  # Breakdown safety (use abs for non-SPD preconditioners)
             
             alpha = torch.dot(d, r) / d_Aq
             
