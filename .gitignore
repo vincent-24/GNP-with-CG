@@ -4,28 +4,46 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-build/
+build*/
 dist/
-*.egg
+*.egg*
 
 *.pt
 *.pth
 
 dump/*
-!dump/01-14-2026
-!dump/01-19-2026
-!dump/01-20-2026
-data/pcg_harvested/*
-data/SuiteSparse/*
+!dump/02-04-2026
+!dump/02-17-2026
+data/*
 logs/
+temp/
 
 .vscode/
 .idea/
 *.swp
 *.swo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 .ipynb_checkpoints/
 
+scripts/benchmark*
+scripts/overfit_diagnostic.py
+
 Miniconda3-latest-Linux-x86_64.sh
-run_exp.sbatch
-ARCHITECTURE.md 
+Miniforge3-Linux-aarch64.sh
+run_*.sh
+
+reviews/
+agent_docs/
+tests/
+SBATCH_ARCHITECTURE.md
+MGGNN_Analysis.md
+results.txt
+
+GNP/nn/FNO.py
+GNP/solver/DeflatedCG.py
+scripts/pretrain_mggnn.py
+
+overfit_diagnostic.png

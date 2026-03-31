@@ -6,26 +6,18 @@ import numpy as np
 from GNP.utils import scale_A_by_spectral_radius
 from .layers import MLP, GCNConv
 
-#-----------------------------------------------------------------------------
-# SplitResGCN (Use for FCG / SPD Matrices)
 class SplitResGCN(nn.Module):
-    
-    def __init__(self, A, num_layers, embed, hidden, drop_rate,
-                 scale_input=True, dtype=torch.float32, tie_weights=False):
+    def __init__(self, A, num_layers, embed, hidden, drop_rate, scale_input=True, dtype=torch.float32, tie_weights=False):
         super().__init__()
         self.dtype = dtype
         self.scale_input = scale_input
         self.tie_weights = tie_weights
-        self.AA = scale_A_by_spectral_radius(A).to(dtype)
+        self.register_buffer('AA', scale_A_by_spectral_radius(A).to(dtype))
         self.embed = embed
-        
-        # Encoder (approximates L^T)
         self.enc_mlp = MLP(1, embed, 2, hidden, drop_rate)
         self.enc_gconv = nn.ModuleList()
         self.enc_skip = nn.ModuleList()   
         self.enc_bn = nn.ModuleList()
-        
-        # Decoder (approximates L)
         self.dec_bn = nn.ModuleList()
         
         if not tie_weights:
@@ -48,9 +40,24 @@ class SplitResGCN(nn.Module):
                 self.dec_skip.append(nn.Linear(embed, embed))
             
         self.dropout = nn.Dropout(drop_rate)
+        
+        if dtype == torch.float64:
+            self._cast_to_float64()
+
+    def _cast_to_float64(self):
+        for module in self.modules():
+            if isinstance(module, (nn.Linear, nn.BatchNorm1d)):
+                module.weight.data = module.weight.data.double()
+                if module.bias is not None:
+                    module.bias.data = module.bias.data.double()
+            if isinstance(module, nn.BatchNorm1d):
+                module.running_mean = module.running_mean.double() if module.running_mean is not None else None
+                module.running_var = module.running_var.double() if module.running_var is not None else None
 
     def forward(self, r):
         n, batch_size = r.shape
+        r = r.to(self.dtype)
+        
         if self.scale_input:
             scaling = torch.linalg.vector_norm(r, dim=0) / np.sqrt(n)
             scaling = torch.where(scaling < 1e-12, torch.tensor(1.0, device=r.device, dtype=r.dtype), scaling)
@@ -65,9 +72,8 @@ class SplitResGCN(nn.Module):
             R = self.enc_bn[i](R)
             R = R.view(n, batch_size, -1)
             R = self.dropout(F.relu(R))
-            # R = self.dropout(R)
+            # R = self.dropout(R)   <- causing issues for some reason???
             
-        # --- DECODER (L) ---
         for i in range(self.half_layers):
             if self.tie_weights:
                 enc_idx = self.half_layers - 1 - i
@@ -87,11 +93,12 @@ class SplitResGCN(nn.Module):
             R = self.dec_bn[i](R)
             R = R.view(n, batch_size, -1)
             R = self.dropout(F.relu(R))
-            # R = self.dropout(R)
+            # R = self.dropout(R)   <- causing issues for some reason???
 
         z = self.dec_mlp(R)
         z = z.view(n, batch_size)
 
         if self.scale_input:
             z = z * scaling
+            
         return z
