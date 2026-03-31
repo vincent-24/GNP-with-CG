@@ -22,6 +22,9 @@ temp/
 .idea/
 *.swp
 *.swo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 .ipynb_checkpoints/
 
@@ -31,16 +34,12 @@ scripts/overfit_diagnostic.py
 Miniconda3-latest-Linux-x86_64.sh
 Miniforge3-Linux-aarch64.sh
 run_exp.sbatch
-run_*.sh
 
-ARCHITECTURE.md 
+ARCHITECTURE.md
 INFO.md
 INSTRUCTIONS.md
-MGGNN_Analysis.md
-results.txt
 
 GNP/nn/FNO.py
 GNP/solver/DeflatedCG.py
-scripts/pretrain_mggnn.py
 
 overfit_diagnostic.png
