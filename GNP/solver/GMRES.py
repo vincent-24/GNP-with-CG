@@ -72,8 +72,18 @@ class GMRES():
                 for k in range(j+1):
                     H[k,j] = torch.dot(V[:,k], w)
                     w = w - H[k,j] * V[:,k]
+
+                # Reorthogonalize once to reduce loss of orthogonality.
+                for k in range(j+1):
+                    h_corr = torch.dot(V[:,k], w)
+                    H[k,j] = H[k,j] + h_corr
+                    w = w - h_corr * V[:,k]
+
                 H[j+1,j] = torch.linalg.norm(w)
-                V[:,j+1] = w / H[j+1,j]
+                if H[j+1,j] > 1e-15:
+                    V[:,j+1] = w / H[j+1,j]
+                else:
+                    V[:,j+1] = 0
 
                 # Solve min || H * y - beta * e1 ||: Givens rotation
                 for k in range(j):
@@ -81,7 +91,10 @@ class GMRES():
                     H[k+1,j] = -s[k] * H[k,j] + c[k] * H[k+1,j]
                     H[k,j] = tmp
                 t = torch.sqrt( H[j,j]**2 + H[j+1,j]**2 )
-                c[j], s[j] = H[j,j]/t, H[j+1,j]/t
+                if t > 1e-15:
+                    c[j], s[j] = H[j,j]/t, H[j+1,j]/t
+                else:
+                    c[j], s[j] = 1.0, 0.0
                 H[j,j] = c[j] * H[j,j] + s[j] * H[j+1,j]
                 H[j+1,j] = 0
                 g[j+1] = -s[j] * g[j]

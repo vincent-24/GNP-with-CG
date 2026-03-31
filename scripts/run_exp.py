@@ -14,6 +14,19 @@ from scripts.utils import setup_experiment, load_problem
 from scripts.train import train_routine
 from scripts.test import eval_routine
 
+def _normalize_path(path):
+    return os.path.abspath(os.path.expanduser(path))
+
+def _redirect_slurm_path(path, env_var, default_path, label):
+    resolved = _normalize_path(path)
+    fallback = _normalize_path(os.getenv(env_var, default_path))
+
+    if os.getenv('SLURM_JOB_ID') and resolved.startswith('/u/') and not fallback.startswith('/u/'):
+        print(f"[Path Guard] {label}: redirecting {resolved} -> {fallback}")
+        return fallback
+
+    return resolved
+
 def get_device(args):
     if args.device:
         return torch.device(args.device)
@@ -33,17 +46,32 @@ if __name__ == '__main__':
     parser.add_argument('--data_root', type=str, default=config.OFFLINE_DATASET_DIR, help=f'Directory for PCG harvested datasets (default: {config.OFFLINE_DATASET_DIR})')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to existing checkpoint for evaluation')
     parser.add_argument('--solver', type=str, default=config.BASELINE_SOLVER, choices=list(config.SOLVER_CONFIG.keys()), help=f'Solver for training data harvesting (default: {config.BASELINE_SOLVER})')
-    parser.add_argument('--network_override', type=str, default=config.NETWORK_OVERRIDE, choices=['ResGCN', 'SplitResGCN', 'UNetGCN', 'MGGNN', None], help=f'Override network architecture (default: {config.NETWORK_OVERRIDE})')
+    parser.add_argument('--network_override', type=str, default=config.NETWORK_OVERRIDE, choices=['ResGCN', 'SplitResGCN', 'UNetGCN', 'MGGNN', 'LinearMGGNN', None], help=f'Override network architecture (default: {config.NETWORK_OVERRIDE})')
     parser.add_argument('--tie_weights', action='store_true', default=config.TIE_WEIGHTS, help=f'Tie weights in SplitResGCN (default: {config.TIE_WEIGHTS})')
     parser.add_argument('--harvest_dataset', type=str, default=config.HARVEST_DATASET_PATH, help='Path to pre-harvested dataset (.pt file). If None, auto-generates new dataset.')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu/mps). Auto-detected if not specified.')
     args = parser.parse_args()
+
+    args.location = _redirect_slurm_path(args.location, 'SUITESPARSE_PATH', config.SUITE_SPARSE_PATH, 'SuiteSparse path')
+    args.dump_root = _redirect_slurm_path(args.dump_root, 'GNP_DUMP_PATH', config.DEFAULT_DUMP_PATH, 'Dump root')
+    args.data_root = _redirect_slurm_path(args.data_root, 'GNP_OFFLINE_DATASET_DIR', config.OFFLINE_DATASET_DIR, 'Offline dataset root')
+
+    args.location = _normalize_path(args.location)
+    args.dump_root = _normalize_path(args.dump_root)
+    args.data_root = _normalize_path(args.data_root)
+
+    os.makedirs(args.dump_root, exist_ok=True)
+    os.makedirs(args.data_root, exist_ok=True)
+
     device = get_device(args)
     
     print(f"\nGNP Experiment Runner:")
     print(f"Mode: {args.mode}")
     print(f"Problem: {args.problem}")
     print(f"Device: {device}")
+    print(f"SuiteSparse path: {args.location}")
+    print(f"Dump root: {args.dump_root}")
+    print(f"Offline data root: {args.data_root}")
     
     plot_dir, run_id = setup_experiment(args)   
     A, A_csc, b, x_gt = load_problem(args, device)

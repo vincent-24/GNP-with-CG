@@ -42,7 +42,15 @@ def harvest_pcg_dataset(A, b, device, args, run_id):
     print(f"\n[Harvest] Generating training data  "
           f"(random_ratio={ratio:.2f}, {config.HARVEST_NUM_RUNS} PCG runs)")
     
-    dataset_dir = config.OFFLINE_DATASET_DIR
+    dataset_dir = getattr(args, 'data_root', None) or config.OFFLINE_DATASET_DIR
+    dataset_dir = os.path.abspath(os.path.expanduser(dataset_dir))
+
+    if os.getenv('SLURM_JOB_ID') and dataset_dir.startswith('/u/'):
+        fallback_dir = os.path.abspath(os.path.expanduser(os.getenv('GNP_OFFLINE_DATASET_DIR', config.OFFLINE_DATASET_DIR)))
+        if not fallback_dir.startswith('/u/'):
+            print(f"[Path Guard] Offline dataset dir: redirecting {dataset_dir} -> {fallback_dir}")
+            dataset_dir = fallback_dir
+
     Path(dataset_dir).mkdir(parents=True, exist_ok=True)
     ratio_tag = f'r{ratio:.2f}'
     filename = f'{ratio_tag}_harvested_{args.problem.replace("/", "_")}_ID{run_id}.pt'

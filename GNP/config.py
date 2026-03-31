@@ -5,9 +5,13 @@ SEED = 42
 NUM_WORKERS = 8
 MODE = 'both'  # Options: 'train', 'eval', 'both'
 
-DEFAULT_DUMP_PATH = './dump/'
-SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', './data/SuiteSparse')
-CHECKPOINT_PATH = os.getenv('GNP_CHECKPOINT_PATH', './checkpoints')
+# Keep filesystem defaults on the same /work volume as Slurm logs.
+WORK_ROOT = os.getenv('GNP_WORK_ROOT', '/work/hdd/bdyf/vterrelonge/GNP-with-CG')
+DATA_ROOT = os.getenv('GNP_DATA_PATH', os.path.join(WORK_ROOT, 'data'))
+
+DEFAULT_DUMP_PATH = os.getenv('GNP_DUMP_PATH', os.path.join(WORK_ROOT, 'dump'))
+SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', os.path.join(DATA_ROOT, 'SuiteSparse'))
+CHECKPOINT_PATH = os.getenv('GNP_CHECKPOINT_PATH', os.path.join(WORK_ROOT, 'checkpoints'))
 PROBLEM_PATH = None  
 
 # ============================NEURAL NETWORK ARCHITECTURE============================
@@ -67,7 +71,7 @@ SPECTRAL_STEPS_PER_EPOCH = 50  # Optimizer steps per epoch (no DataLoader)
 
 # ===============================DATASET & HARVESTING================================
 TRAIN_OFFLINE = True   # Set True to use pre-harvested data; False for streaming
-OFFLINE_DATASET_DIR = './data/pcg_harvested'
+OFFLINE_DATASET_DIR = os.getenv('GNP_OFFLINE_DATASET_DIR', os.path.join(DATA_ROOT, 'pcg_harvested'))
 RANDOM_RATIO = 0.0  # Fraction of dataset that is white-noise vectors (0.0 = pure PCG, 1.0 = pure noise)
 
 HARVEST_DATASET_PATH = None 

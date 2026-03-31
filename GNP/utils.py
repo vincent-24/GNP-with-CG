@@ -291,19 +291,37 @@ def load_suitesparse(location, problem, device):
     
     if len(matrix) != 0:
         location = os.path.abspath(os.path.expanduser(location))
-        group, name = problem.split('/')
-        fetch(problem, format='MAT', location=os.path.join(location, group))[0]
+        group, _ = problem.split('/', 1)
+        mat_path = os.path.join(location, problem + '.mat')
 
-        try:
-            P = sio.loadmat(os.path.join(location, problem))
-            A = P['Problem']['A'][0][0]
-        except NotImplementedError:
-            P = mat73.loadmat(os.path.join(location, problem + '.mat'))
-            A = P['Problem']['A']
+        def _download_mat():
+            fetch(problem, format='MAT', location=os.path.join(location, group))[0]
 
-        del P
-        A = torch.sparse_csc_tensor(A.indptr, A.indices, A.data, A.shape, dtype=torch.float64).to(device)
-        return A
+        # Ensure a MAT file exists locally before attempting to parse it.
+        _download_mat()
+
+        for attempt in range(2):
+            try:
+                try:
+                    P = sio.loadmat(mat_path)
+                    A = P['Problem']['A'][0][0]
+                except NotImplementedError:
+                    P = mat73.loadmat(mat_path)
+                    A = P['Problem']['A']
+
+                del P
+                A = torch.sparse_csc_tensor(A.indptr, A.indices, A.data, A.shape, dtype=torch.float64).to(device)
+                return A
+            except OSError as exc:
+                if attempt == 0:
+                    if os.path.exists(mat_path):
+                        os.remove(mat_path)
+                    _download_mat()
+                    continue
+
+                raise OSError(
+                    f'Failed to read SuiteSparse MAT file after re-download: {mat_path}'
+                ) from exc
     else:
         raise Exception(f'Unsupported problem {problem}!')
 

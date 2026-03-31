@@ -7,8 +7,10 @@ from GNP.utils import scale_A_by_spectral_radius
 from .layers import MLP, GCNConv
 
 class ResGCN(nn.Module):
-    def __init__(self, A, num_layers, embed, hidden, drop_rate, scale_input=True, dtype=torch.float32):
+    def __init__(self, A, num_layers, embed, hidden, drop_rate, scale_input=True, dtype=None):
         super().__init__()
+        if dtype is None:
+            dtype = A.dtype if torch.is_tensor(A) else torch.float32
         self.dtype = dtype
         self.num_layers = num_layers
         self.embed = embed
@@ -41,12 +43,19 @@ class ResGCN(nn.Module):
                 module.running_var = module.running_var.double() if module.running_var is not None else None
 
     def forward(self, r):
+        squeeze_output = False
+        if r.dim() == 1:
+            r = r.unsqueeze(1)
+            squeeze_output = True
+        elif r.dim() != 2:
+            raise ValueError(f"Expected 1D or 2D input, got shape {tuple(r.shape)}")
+
         n, batch_size = r.shape
         r = r.to(self.dtype)
         
         if self.scale_input:
             scaling = torch.linalg.vector_norm(r, dim=0) / np.sqrt(n)
-            scaling = torch.where(scaling < 1e-12, torch.tensor(1.0, device=r.device, dtype=r.dtype), scaling)
+            scaling = torch.where(scaling < 1e-12, torch.ones_like(scaling), scaling)
             r = r / scaling
         
         r = r.view(n, batch_size, 1)
@@ -64,5 +73,8 @@ class ResGCN(nn.Module):
         
         if self.scale_input:
             z = z * scaling
+
+        if squeeze_output:
+            z = z.squeeze(1)
             
         return z

@@ -4,7 +4,7 @@ from scipy import sparse
 
 
 class IChol():
-    def __init__(self, A, drop_tol=1e-3):
+    def __init__(self, A, drop_tol=1e-3, shift=0.0):
         """
         Incomplete Cholesky Preconditioner tracking MATLAB's 'ict' implementation.
 
@@ -16,6 +16,11 @@ class IChol():
         to a guaranteed-SPD **Jacobi (diagonal) preconditioner** instead of a
         pivoted ILU (which would produce an asymmetric, invalid preconditioner
         that crashes PCG).
+
+        Args:
+            A: Sparse CSC system matrix.
+            drop_tol: ILU drop tolerance.
+            shift: Optional diagonal shift added as shift * I for stability.
         """
         self.device = A.device
         self.dtype = A.dtype
@@ -33,6 +38,11 @@ class IChol():
              A_cpu.ccol_indices().numpy()),
             shape=(n, n)
         )
+
+        # Backward-compatible diagonal stabilization used by config/tests.
+        shift = 0.0 if shift is None else float(shift)
+        if shift != 0.0:
+            spA = spA + shift * sparse.eye(n, format='csc', dtype=spA.dtype)
 
         # ---------------------------------------------------------
         # 1. Exact replication of MATLAB's opts.diagcomp
