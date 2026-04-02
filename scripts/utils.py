@@ -133,10 +133,19 @@ def get_preconditioner(precond_type, A, A_csc, device, args, master_ckpt_path=No
         elif net_cls.__name__ == 'UNetGCN':
             net_kwargs['num_levels'] = config.NUM_LEVELS
             net_kwargs['layers_per_level'] = config.LAYERS_PER_LEVEL
-        elif net_cls.__name__ == 'MGGNN':
+        elif net_cls.__name__ in ('MGGNN', 'LinearMGGNN'):
             net_kwargs['num_levels'] = config.NUM_LEVELS
-            net_kwargs['num_blocks'] = config.NUM_BLOCKS
-            net_kwargs['K'] = config.TAGCONV_K
+            net_kwargs['num_vcycles'] = config.LINEAR_MGGNN_NUM_VCYCLES
+            net_kwargs['smoother_K'] = config.LINEAR_MGGNN_SMOOTHER_K
+            net_kwargs['coarsest_K'] = config.LINEAR_MGGNN_COARSEST_K
+            net_kwargs['share_smoothers'] = config.LINEAR_MGGNN_SHARE_SMOOTHERS
+        elif net_cls.__name__ == 'ICholSparseTensorNet':
+            net_kwargs['drop_tol'] = config.ICHOL_SPARSE_DROP_TOL
+            net_kwargs['shift'] = config.ICHOL_SPARSE_SHIFT
+            net_kwargs['init_alpha'] = config.ICHOL_SPARSE_INIT_ALPHA
+            net_kwargs['init_gain'] = config.ICHOL_SPARSE_INIT_GAIN
+            net_kwargs['min_alpha'] = config.ICHOL_SPARSE_MIN_ALPHA
+            net_kwargs['gain_delta'] = config.ICHOL_SPARSE_GAIN_DELTA
         elif net_cls.__name__ == 'FNO':
             net_kwargs['modes'] = config.FNO_MODES
             net_kwargs['grid_size'] = config.FNO_GRID_SIZE

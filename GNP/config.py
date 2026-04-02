@@ -38,6 +38,14 @@ LINEAR_MGGNN_SMOOTHER_K = 3        # Polynomial degree for Chebyshev-like smooth
 LINEAR_MGGNN_COARSEST_K = 5        # Polynomial degree for coarsest level solve
 LINEAR_MGGNN_SHARE_SMOOTHERS = True  # Share pre/post smoothers (ensures symmetric operator)
 
+# ICholSparseTensorNet-specific (frozen IChol sparse-tensor core + trainable scalars)
+ICHOL_SPARSE_DROP_TOL = 1e-3
+ICHOL_SPARSE_SHIFT = 1e-3
+ICHOL_SPARSE_INIT_ALPHA = 0.95
+ICHOL_SPARSE_INIT_GAIN = 1.0
+ICHOL_SPARSE_MIN_ALPHA = 0.9
+ICHOL_SPARSE_GAIN_DELTA = 0.1
+
 # ---- MGGNN v2: Neural Multigrid Generator features ----
 # Phase 1 — Differentiable coarsening (MinCutPool-style learned topology)
 LEARNED_COARSENING = False

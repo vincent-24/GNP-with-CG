@@ -36,7 +36,8 @@ Miniforge3-Linux-aarch64.sh
 run_*.sh
 
 reviews/
-agent_docs/
+.claude/
+CLAUDE.md
 tests/
 SBATCH_ARCHITECTURE.md
 MGGNN_Analysis.md

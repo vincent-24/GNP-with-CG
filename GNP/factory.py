@@ -22,7 +22,14 @@ def get_solver_class(solver_name: str):
 
 
 def get_network_class(net_name: str):
-    from GNP.nn import ResGCN, SplitResGCN, UNetGCN, MGGNN, LinearMGGNN
+    from GNP.nn import (
+        ResGCN,
+        SplitResGCN,
+        UNetGCN,
+        MGGNN,
+        LinearMGGNN,
+        ICholSparseTensorNet,
+    )
 
     net_classes = {
         'ResGCN': ResGCN,
@@ -30,6 +37,7 @@ def get_network_class(net_name: str):
         'UNetGCN': UNetGCN,
         'MGGNN': MGGNN,
         'LinearMGGNN': LinearMGGNN,
+        'ICholSparseTensorNet': ICholSparseTensorNet,
     }
 
     if net_name not in net_classes:

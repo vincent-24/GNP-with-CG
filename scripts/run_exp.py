@@ -46,7 +46,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_root', type=str, default=config.OFFLINE_DATASET_DIR, help=f'Directory for PCG harvested datasets (default: {config.OFFLINE_DATASET_DIR})')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to existing checkpoint for evaluation')
     parser.add_argument('--solver', type=str, default=config.BASELINE_SOLVER, choices=list(config.SOLVER_CONFIG.keys()), help=f'Solver for training data harvesting (default: {config.BASELINE_SOLVER})')
-    parser.add_argument('--network_override', type=str, default=config.NETWORK_OVERRIDE, choices=['ResGCN', 'SplitResGCN', 'UNetGCN', 'MGGNN', 'LinearMGGNN', None], help=f'Override network architecture (default: {config.NETWORK_OVERRIDE})')
+    parser.add_argument('--network_override', type=str, default=config.NETWORK_OVERRIDE, choices=['ResGCN', 'SplitResGCN', 'UNetGCN', 'MGGNN', 'LinearMGGNN', 'ICholSparseTensorNet', None], help=f'Override network architecture (default: {config.NETWORK_OVERRIDE})')
     parser.add_argument('--tie_weights', action='store_true', default=config.TIE_WEIGHTS, help=f'Tie weights in SplitResGCN (default: {config.TIE_WEIGHTS})')
     parser.add_argument('--harvest_dataset', type=str, default=config.HARVEST_DATASET_PATH, help='Path to pre-harvested dataset (.pt file). If None, auto-generates new dataset.')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu/mps). Auto-detected if not specified.')

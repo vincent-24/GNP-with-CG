@@ -179,6 +179,13 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
         net_kwargs['smoother_K'] = config.LINEAR_MGGNN_SMOOTHER_K
         net_kwargs['coarsest_K'] = config.LINEAR_MGGNN_COARSEST_K
         net_kwargs['share_smoothers'] = config.LINEAR_MGGNN_SHARE_SMOOTHERS
+    elif network_class.__name__ == 'ICholSparseTensorNet':
+        net_kwargs['drop_tol'] = config.ICHOL_SPARSE_DROP_TOL
+        net_kwargs['shift'] = config.ICHOL_SPARSE_SHIFT
+        net_kwargs['init_alpha'] = config.ICHOL_SPARSE_INIT_ALPHA
+        net_kwargs['init_gain'] = config.ICHOL_SPARSE_INIT_GAIN
+        net_kwargs['min_alpha'] = config.ICHOL_SPARSE_MIN_ALPHA
+        net_kwargs['gain_delta'] = config.ICHOL_SPARSE_GAIN_DELTA
 
     net = network_class(**net_kwargs).to(device)
 
@@ -234,9 +241,15 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
                 'embed_dim': config.EMBED_DIM,
                 'hidden_dim': config.HIDDEN_DIM,
                 'drop_rate': config.DROP_RATE,
-                'num_levels': config.NUM_LEVELS if network_class.__name__ in ['MGGNN', 'UNetGCN'] else None,
+                'num_levels': config.NUM_LEVELS if network_class.__name__ in ['MGGNN', 'UNetGCN', 'LinearMGGNN'] else None,
                 'num_blocks': config.NUM_BLOCKS if network_class.__name__ == 'MGGNN' else None,
                 'tagconv_k': config.TAGCONV_K if network_class.__name__ == 'MGGNN' else None,
+                'ichol_sparse_drop_tol': config.ICHOL_SPARSE_DROP_TOL if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_shift': config.ICHOL_SPARSE_SHIFT if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_init_alpha': config.ICHOL_SPARSE_INIT_ALPHA if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_init_gain': config.ICHOL_SPARSE_INIT_GAIN if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_min_alpha': config.ICHOL_SPARSE_MIN_ALPHA if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_gain_delta': config.ICHOL_SPARSE_GAIN_DELTA if network_class.__name__ == 'ICholSparseTensorNet' else None,
             },
             'nn_training': {
                 'mode': 'spectral',
@@ -335,6 +348,12 @@ def train_routine(A, b, x_gt, device, args, plot_dir, run_id):
                 'hidden_dim': config.HIDDEN_DIM,
                 'drop_rate': config.DROP_RATE,
                 'tie_weights': args.tie_weights if network_class.__name__ == 'SplitResGCN' else None,
+                'ichol_sparse_drop_tol': config.ICHOL_SPARSE_DROP_TOL if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_shift': config.ICHOL_SPARSE_SHIFT if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_init_alpha': config.ICHOL_SPARSE_INIT_ALPHA if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_init_gain': config.ICHOL_SPARSE_INIT_GAIN if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_min_alpha': config.ICHOL_SPARSE_MIN_ALPHA if network_class.__name__ == 'ICholSparseTensorNet' else None,
+                'ichol_sparse_gain_delta': config.ICHOL_SPARSE_GAIN_DELTA if network_class.__name__ == 'ICholSparseTensorNet' else None,
             },
             'nn_training': {
                 'mode': 'supervised',
