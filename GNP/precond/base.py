@@ -4,13 +4,11 @@ import torch
 import numpy as np
 from abc import ABC, abstractmethod
 
-
 class BasePreconditioner(ABC):
     """Abstract base class for all preconditioners.
 
     Defines the interface that all preconditioners must implement.
     """
-
     @abstractmethod
     def apply(self, r: torch.Tensor) -> torch.Tensor:
         """Apply the preconditioner to residual vector r.
@@ -23,7 +21,6 @@ class BasePreconditioner(ABC):
         """
         pass
 
-
 class CPUPreconditioner(BasePreconditioner):
     """Base class for preconditioners that require CPU/scipy operations.
 
@@ -32,7 +29,6 @@ class CPUPreconditioner(BasePreconditioner):
 
     Subclasses should implement _apply_numpy() instead of apply().
     """
-
     def __init__(self, device: torch.device):
         """Initialize with target device.
 

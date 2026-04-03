@@ -2,8 +2,9 @@ import torch
 import numpy as np
 from scipy import sparse
 
+from .base import BasePreconditioner
 
-class IChol():
+class IChol(BasePreconditioner):
     def __init__(self, A, drop_tol=1e-3, shift=0.0):
         """
         Incomplete Cholesky Preconditioner tracking MATLAB's 'ict' implementation.
@@ -31,7 +32,6 @@ class IChol():
 
         A_cpu = A.to('cpu')
         n = A_cpu.shape[0]
-
         spA = sparse.csc_matrix(
             (A_cpu.values().numpy(),
              A_cpu.row_indices().numpy(),
@@ -41,6 +41,7 @@ class IChol():
 
         # Backward-compatible diagonal stabilization used by config/tests.
         shift = 0.0 if shift is None else float(shift)
+
         if shift != 0.0:
             spA = spA + shift * sparse.eye(n, format='csc', dtype=spA.dtype)
 
@@ -50,9 +51,7 @@ class IChol():
         # ---------------------------------------------------------
         A_abs_row_sum = np.array(np.abs(spA).sum(axis=1)).flatten()
         A_diag = spA.diagonal()
-
         safe_diag = np.where(np.abs(A_diag) < 1e-12, 1e-12, np.abs(A_diag))
-
         alpha = np.max(A_abs_row_sum / safe_diag) - 2.0
 
         if alpha > 0:
@@ -135,12 +134,8 @@ class IChol():
         r_col = r.unsqueeze(-1) if r.dim() == 1 else r
 
         # Forward substitution:  L y = r
-        y = torch.linalg.solve_triangular(
-            self.L_dense, r_col, upper=False, unitriangular=False
-        )
+        y = torch.linalg.solve_triangular(self.L_dense, r_col, upper=False, unitriangular=False)
         # Backward substitution: L^T z = y
-        z = torch.linalg.solve_triangular(
-            self.LT_dense, y, upper=True, unitriangular=False
-        )
+        z = torch.linalg.solve_triangular(self.LT_dense, y, upper=True, unitriangular=False)
 
         return z.squeeze(-1) if r.dim() == 1 else z

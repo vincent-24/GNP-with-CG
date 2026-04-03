@@ -1,12 +1,10 @@
 import os
+import math
 import numpy as np
 import scipy.sparse as sp
-import math
 import torch
-import torch.nn.functional as F
 
-from torch.utils.data import IterableDataset, Dataset
-from torch.utils.data.dataloader import DataLoader
+from torch.utils.data import Dataset
 from tqdm import tqdm
 from GNP import config
 
@@ -17,6 +15,7 @@ class OfflineDataset(Dataset):
             raise FileNotFoundError(f"Dataset not found: {dataset_path}")
         
         data = torch.load(dataset_path, weights_only=False)
+
         if isinstance(data, dict):
             self.errors = data['e']
             self.metadata = data.get('metadata', {})
@@ -70,6 +69,7 @@ class OfflineDataset(Dataset):
             self.A_cpu = torch.sparse_coo_tensor(indices, values, shape).coalesce()
         elif torch.is_tensor(A):
             self.A_cpu = A.cpu().to(target_dtype)
+
             if A.is_sparse:
                 self.A_cpu = self.A_cpu.coalesce()
         else:
@@ -101,7 +101,6 @@ class GNP():
         self.dtype = net.dtype
         self.n = A.shape[0]
         self.A_torch = None
-        self.loss_params = torch.nn.Parameter(torch.zeros(2, device=device))
 
     def _prepare_A_torch(self):
         if self.A_torch is not None:
@@ -139,6 +138,7 @@ class GNP():
         x_scaled = self.net(b_scaled)
         x = x_scaled / scaling_factor
         # Cast back to input dtype to avoid mismatches with A_torch (float64)
+
         return x.to(input_dtype)
 
     def _compute_supervised_loss(self, e_pred, e_true):
@@ -214,7 +214,6 @@ class GNP():
         for epoch in range(epochs):
             self.net.train()
             epoch_losses = []
-
             pbar = tqdm(range(steps_per_epoch),
                         desc=f"Epoch {epoch+1}/{epochs}",
                         leave=False, disable=not progress_bar)
@@ -225,22 +224,9 @@ class GNP():
                     num_vectors=num_vectors,
                     power_iters=power_iters,
                 )
-
-                loss = rho
-                # Add auxiliary losses from MGGNN v2 features
-                if hasattr(self.net, 'get_aux_losses'):
-                    aux = self.net.get_aux_losses()
-                    if 'L_cut' in aux:
-                        loss = loss + config.LAMBDA_CUT * aux['L_cut']
-                    if 'L_orth' in aux:
-                        loss = loss + config.LAMBDA_ORTH * aux['L_orth']
-                    if 'L_sym' in aux:
-                        loss = loss + config.LAMBDA_SYM * aux['L_sym']
-
-                loss.backward()
+                rho.backward()
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=config.GRAD_CLIP_NORM)
                 optimizer.step()
-
                 epoch_losses.append(rho.item())
                 pbar.set_postfix({'rho': f'{rho.item():.4f}'})
 
@@ -254,6 +240,7 @@ class GNP():
             if improved:
                 best_loss = avg_loss
                 best_epoch = epoch + 1
+
                 if checkpoint_path is not None:
                     torch.save(self.net.state_dict(), checkpoint_path)
 
@@ -262,6 +249,7 @@ class GNP():
                   f"rho: {avg_loss:.6f}{status}")
 
         print(f"\nBest spectral radius: {best_loss:.6f} at epoch {best_epoch}")
+
         return hist_train_loss, best_loss, best_epoch
 
     def train(self, train_loader, val_loader, epochs, optimizer, scheduler=None, checkpoint_path=None, progress_bar=True):
@@ -294,17 +282,6 @@ class GNP():
                 optimizer.zero_grad()
                 e_pred = self._scale_equivariant_forward(r_in)
                 loss = self._compute_supervised_loss(e_pred, e_true)
-                
-                # Add auxiliary regularisation losses from MGGNN v2 features
-                if hasattr(self.net, 'get_aux_losses'):
-                    aux = self.net.get_aux_losses()
-                    if 'L_cut' in aux:
-                        loss = loss + config.LAMBDA_CUT * aux['L_cut']
-                    if 'L_orth' in aux:
-                        loss = loss + config.LAMBDA_ORTH * aux['L_orth']
-                    if 'L_sym' in aux:
-                        loss = loss + config.LAMBDA_SYM * aux['L_sym']
-
                 loss.backward()
                 optimizer.step()
                 
@@ -344,6 +321,7 @@ class GNP():
             if improved:
                 best_val_loss = avg_val_loss
                 best_epoch = epoch + 1
+                
                 if checkpoint_path is not None:
                     torch.save(self.net.state_dict(), checkpoint_path)
             

@@ -30,6 +30,8 @@ dependencies = [
     "tqdm>=4.65.0",
     "mat73>=0.60",
     "ssgetpy>=1.0.0",
+    "matplotlib>=3.7.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]

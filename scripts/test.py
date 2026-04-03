@@ -16,9 +16,8 @@ def eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path=Non
     results = {}
     
     print(f"\n{'='*60}")
-    print(f"Running {len(config.EXPERIMENTS)} experiments...")
+    print(f"RUNNING {len(config.EXPERIMENTS)} EXPERIMENTS")
     print(f"{'='*60}")
-    print("Solving...")
     
     for exp in config.EXPERIMENTS:
         name = exp['name']

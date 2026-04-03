@@ -4,15 +4,12 @@ This module handles the lazy imports to avoid circular dependencies.
 """
 from GNP import config
 
-
 def get_solver_class(solver_name: str):
-    from GNP.solver import GMRES, FCG, PCG, PolakRibiereCG
+    from GNP.solver import GMRES, PCG
 
     solver_classes = {
         'GMRES': GMRES,
-        'FCG': FCG,
         'PCG': PCG,
-        'PolakRibiereCG': PolakRibiereCG,
     }
 
     if solver_name not in solver_classes:
@@ -20,23 +17,17 @@ def get_solver_class(solver_name: str):
 
     return solver_classes[solver_name]
 
-
 def get_network_class(net_name: str):
-    from GNP.nn import ResGCN, SplitResGCN, UNetGCN, MGGNN, LinearMGGNN
+    from GNP.nn import TwoLevelMGGNN
 
     net_classes = {
-        'ResGCN': ResGCN,
-        'SplitResGCN': SplitResGCN,
-        'UNetGCN': UNetGCN,
-        'MGGNN': MGGNN,
-        'LinearMGGNN': LinearMGGNN,
+        'TwoLevelMGGNN': TwoLevelMGGNN,
     }
 
     if net_name not in net_classes:
         raise ValueError(f"Unknown network: {net_name}. Available: {list(net_classes.keys())}")
 
     return net_classes[net_name]
-
 
 def get_solver_info(solver_name: str):
     if solver_name not in config.SOLVER_CONFIG:

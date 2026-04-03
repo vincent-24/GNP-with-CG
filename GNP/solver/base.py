@@ -9,7 +9,8 @@ class IterativeSolver:
         x = x0.clone() if x0 is not None else torch.zeros_like(b)
         norm_b = torch.linalg.norm(b)
 
-        if norm_b == 0: norm_b = 1.0
+        if norm_b == 0: 
+            norm_b = 1.0
 
         hist_abs = []
         hist_rel = []
@@ -20,12 +21,14 @@ class IterativeSolver:
         tic = time.time()
         pbar = None
 
-        if progress_bar: pbar = tqdm(total=max_iters, desc=desc)
+        if progress_bar: 
+            pbar = tqdm(total=max_iters, desc=desc)
 
         return x, norm_b, (hist_abs, hist_rel, hist_energy, hist_time), tic, pbar
 
     def _apply_M(self, M, r):
-        if M is not None: return M.apply(r)
+        if M is not None: 
+            return M.apply(r)
         return r.clone()    # <- runs without preconditioner, so M = I
 
     def _update_history(self, r, norm_b, tic, history_tuple, energy_val=None):
@@ -36,7 +39,8 @@ class IterativeSolver:
         hist_rel.append(rel_res.item())
         hist_time.append(time.time() - tic)
         
-        if energy_val is not None: hist_energy.append(energy_val.item())
+        if energy_val is not None: 
+            hist_energy.append(energy_val.item())
             
         return abs_res, rel_res
 
@@ -45,6 +49,7 @@ class IterativeSolver:
             return
         
         self._direction_count += 1
+        
         if self._direction_count % config.ORTHOGONALITY_SAMPLE_RATE == 0:
             self.search_directions.append(d.detach().cpu().clone())
 

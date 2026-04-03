@@ -3,7 +3,6 @@ import torch
 # Lanczos iteration with Full Re-orthogonalization
 # Used for data generation with symmetric matrices (required for FCG/CG)
 class Lanczos():
-
     def build(self, A, v0=None, m=100):
         n = A.shape[0]
 
@@ -33,6 +32,7 @@ class Lanczos():
             
             if j < m:
                 T[j+1, j] = beta_next
+
                 if j < m - 1: # Symmetric part
                     T[j, j+1] = beta_next
             
@@ -43,4 +43,5 @@ class Lanczos():
 
         Vm1 = V
         barTm = T 
+        
         return Vm1, barTm

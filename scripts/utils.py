@@ -15,7 +15,6 @@ from datetime import datetime
 from pathlib import Path
 from GNP.problems import gen_x_all_ones, gen_x_randn, gen_x_sinusoid, gen_x_alternating, gen_x_ramp
 from GNP.precond import GNP
-from GNP.precond.ILU import ILU
 from GNP.precond.IChol import IChol
 from GNP.precond.AMGPreconditioner import AMGPreconditioner
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse
@@ -28,19 +27,33 @@ def get_timestamp_str():
 def get_month_str():
     return datetime.now().strftime("%m-%Y")
 
-def get_matrix_output_dir(base_dump_path, problem):
-    """Create hierarchical output directory: base/MM-YYYY/MM-DD-YYYY/Category/MatrixName/"""
-    month_str = get_month_str()
-    date_str = get_timestamp_str()
+def get_matrix_output_dir(base_dump_path, problem, flat=False):
+    """Create output directory for a matrix.
 
-    # Parse problem name (e.g., "Boeing/msc01050" -> category="Boeing", name="msc01050")
+    flat=False (default): base/MM-YYYY/MM-DD-YYYY/Category/MatrixName/
+    flat=True:            base/Category/MatrixName/
+    """
     if '/' in problem:
         category, name = problem.split('/', 1)
     else:
         category = "misc"
         name = problem
 
-    path = os.path.join(base_dump_path, month_str, date_str, category, name)
+    if flat:
+        path = os.path.join(base_dump_path, category, name)
+    else:
+        month_str = get_month_str()
+        date_str = get_timestamp_str()
+        path = os.path.join(base_dump_path, month_str, date_str, category, name)
+
+    Path(path).mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_category_dir(base_path, problem):
+    """Create category-level directory: base/Category/"""
+    category = problem.split('/', 1)[0] if '/' in problem else "misc"
+    path = os.path.join(base_path, category)
     Path(path).mkdir(parents=True, exist_ok=True)
     return path
 
@@ -63,20 +76,28 @@ def setup_experiment(args):
     args.dump_root = os.path.abspath(os.path.expanduser(args.dump_root))
     Path(args.dump_root).mkdir(parents=True, exist_ok=True)
 
-    # Use new hierarchical directory structure: dump/MM-YYYY/MM-DD-YYYY/Category/MatrixName/
-    plot_dir = get_matrix_output_dir(args.dump_root, args.problem)
+    flat = getattr(args, 'flat_hierarchy', False)
+    plot_dir = get_matrix_output_dir(args.dump_root, args.problem, flat=flat)
 
-    print(f"Output directory: {plot_dir}")
-    print(f"Run ID: {run_id}")
+    ckpt_root = getattr(args, 'ckpt_root', None)
+    if ckpt_root:
+        ckpt_dir = get_category_dir(ckpt_root, args.problem)
+    else:
+        ckpt_dir = plot_dir
 
-    return plot_dir, run_id
+    print(f"\tResults path: {plot_dir}")
+    if ckpt_dir != plot_dir:
+        print(f"\tCheckpoint path: {ckpt_dir}")
+    print(f"\tRun ID: {run_id}")
+
+    return plot_dir, ckpt_dir, run_id
 
 def load_problem(args, device):
-    print(f'\nLoading {args.problem}')
+    print(f'\nMatrix: {args.problem}')
     A = load_suitesparse(args.location, args.problem, device)
     A = scale_A_by_spectral_radius(A)
     n = A.shape[0]
-    print(f'Matrix n={n}, nnz={A._nnz()}')
+    print(f'\tn = {n} \n\tnnz = {A._nnz()}')
     
     classical_preconds = {'ILU', 'IChol', 'AMG'}
     needs_csc = any(
@@ -94,11 +115,17 @@ def load_problem(args, device):
         enabled = [exp['name'] for exp in config.EXPERIMENTS if exp.get('precond') in classical_preconds]
         print(f"Classical preconditioners enabled: {', '.join(enabled)}")
     
-    # x_gt = gen_x_all_ones(n).to(device)     # <- x_gt used in the GNP paper
-    x_gt = gen_x_randn(n).to(device).to(torch.float64)
-    # x_gt = gen_x_ramp(n).to(device)
-    # x_gt = gen_x_sinusoid(n).to(device)
-    # x_gt = gen_x_alternating(n).to(device)
+    if config.X_GROUND_TRUTH == 'random':
+        x_gt = gen_x_randn(n).to(device).to(torch.float64)
+    elif config.X_GROUND_TRUTH == 'ones':
+        x_gt = gen_x_all_ones(n).to(device) # used in GNP paper
+    elif config.X_GROUND_TRUTH == 'ramp':
+        x_gt = gen_x_ramp(n).to(device)
+    elif config.X_GROUND_TRUTH == 'sine':
+        x_gt = gen_x_sinusoid(n).to(device)
+    elif config.X_GROUND_TRUTH == 'alternating':
+        x_gt = gen_x_alternating(n).to(device)
+
     b = A @ x_gt
     
     return A, A_csc, b, x_gt
@@ -121,36 +148,28 @@ def get_preconditioner(precond_type, A, A_csc, device, args, master_ckpt_path=No
             net_cls = get_network_class(cfg['default_net'])
         
         net_kwargs = {
-            'A': A, 
-            'num_layers': config.NUM_LAYERS, 
+            'A': A,
+            'num_layers': config.NUM_LAYERS,
             'embed': config.EMBED_DIM,
-            'hidden': config.HIDDEN_DIM, 
-            'drop_rate': config.DROP_RATE
+            'hidden': config.HIDDEN_DIM,
+            'drop_rate': config.DROP_RATE,
+            'num_levels': 2,
+            'num_vcycles': config.TWO_LEVEL_NUM_STEPS,
+            'smoother_K': config.TWO_LEVEL_FINE_K,
+            'coarsest_K': config.TWO_LEVEL_COARSE_K,
+            'share_smoothers': config.TWO_LEVEL_SHARE_BLOCKS,
         }
-
-        if net_cls.__name__ == 'SplitResGCN':
-            net_kwargs['tie_weights'] = args.tie_weights
-        elif net_cls.__name__ == 'UNetGCN':
-            net_kwargs['num_levels'] = config.NUM_LEVELS
-            net_kwargs['layers_per_level'] = config.LAYERS_PER_LEVEL
-        elif net_cls.__name__ == 'MGGNN':
-            net_kwargs['num_levels'] = config.NUM_LEVELS
-            net_kwargs['num_blocks'] = config.NUM_BLOCKS
-            net_kwargs['K'] = config.TAGCONV_K
-        elif net_cls.__name__ == 'FNO':
-            net_kwargs['modes'] = config.FNO_MODES
-            net_kwargs['grid_size'] = config.FNO_GRID_SIZE
         
         net = net_cls(**net_kwargs).to(device)
         net.load_state_dict(torch.load(master_ckpt_path, map_location=device))
-        
         return GNP(A, net, device)
+
     elif precond_type == 'IChol':
         return IChol(A_csc, **kwargs)
-    elif precond_type == 'ILU':
-        return ILU(A_csc, ilu_factors_file=None, save_ilu_factors=False, **kwargs)
+
     elif precond_type == 'AMG':
         return AMGPreconditioner(A_csc, **kwargs)
+        
     else:
         raise ValueError(f"Unknown preconditioner type: {precond_type}")
 

@@ -23,6 +23,7 @@ def _redirect_slurm_path(path, env_var, default_path, label):
 
     if os.getenv('SLURM_JOB_ID') and resolved.startswith('/u/') and not fallback.startswith('/u/'):
         print(f"[Path Guard] {label}: redirecting {resolved} -> {fallback}")
+        
         return fallback
 
     return resolved
@@ -39,17 +40,18 @@ def get_device(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, default=config.MODE, choices=['train', 'eval', 'both'], help=f'Run mode (default: {config.MODE})')
-    parser.add_argument('--problem', type=str, default=config.PROBLEM_PATH, help=f'SuiteSparse matrix name (default: {config.PROBLEM_PATH})')
+    parser.add_argument('--mode', type=str, default=config.MODE, choices=['train', 'eval', 'both'])
+    parser.add_argument('--problem', type=str, default=config.PROBLEM_PATH, help='SuiteSparse matrix name')
     parser.add_argument('--location', type=str, default=config.SUITE_SPARSE_PATH, help='Path to SuiteSparse data')
-    parser.add_argument('--dump_root', type=str, default=config.DEFAULT_DUMP_PATH, help=f'Root directory for outputs (default: {config.DEFAULT_DUMP_PATH})')
-    parser.add_argument('--data_root', type=str, default=config.OFFLINE_DATASET_DIR, help=f'Directory for PCG harvested datasets (default: {config.OFFLINE_DATASET_DIR})')
+    parser.add_argument('--dump_root', type=str, default=config.DEFAULT_DUMP_PATH, help='Results output directory')
+    parser.add_argument('--data_root', type=str, default=config.OFFLINE_DATASET_DIR, help='Directory for CG harvested datasets')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to existing checkpoint for evaluation')
-    parser.add_argument('--solver', type=str, default=config.BASELINE_SOLVER, choices=list(config.SOLVER_CONFIG.keys()), help=f'Solver for training data harvesting (default: {config.BASELINE_SOLVER})')
-    parser.add_argument('--network_override', type=str, default=config.NETWORK_OVERRIDE, choices=['ResGCN', 'SplitResGCN', 'UNetGCN', 'MGGNN', 'LinearMGGNN', None], help=f'Override network architecture (default: {config.NETWORK_OVERRIDE})')
-    parser.add_argument('--tie_weights', action='store_true', default=config.TIE_WEIGHTS, help=f'Tie weights in SplitResGCN (default: {config.TIE_WEIGHTS})')
-    parser.add_argument('--harvest_dataset', type=str, default=config.HARVEST_DATASET_PATH, help='Path to pre-harvested dataset (.pt file). If None, auto-generates new dataset.')
+    parser.add_argument('--solver', type=str, default=config.BASELINE_SOLVER, choices=list(config.SOLVER_CONFIG.keys()), help='Solver for training data harvesting')
+    parser.add_argument('--network_override', type=str, default=config.NETWORK_OVERRIDE, choices=['TwoLevelMGGNN'], help='Neural network architecture')
+    parser.add_argument('--harvest_dataset', type=str, default=config.HARVEST_DATASET_PATH, help='Path to pre-harvested dataset (.pt file). Auto-generates if not specified.')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu/mps). Auto-detected if not specified.')
+    parser.add_argument('--ckpt_root', type=str, default=None, help='Root directory for checkpoints.')
+    parser.add_argument('--flat_hierarchy', action='store_true', help='Use flat directory hierarchy (Category/Matrix) without date nesting')
     args = parser.parse_args()
 
     args.location = _redirect_slurm_path(args.location, 'SUITESPARSE_PATH', config.SUITE_SPARSE_PATH, 'SuiteSparse path')
@@ -60,27 +62,31 @@ if __name__ == '__main__':
     args.dump_root = _normalize_path(args.dump_root)
     args.data_root = _normalize_path(args.data_root)
 
+    if args.ckpt_root:
+        args.ckpt_root = _normalize_path(args.ckpt_root)
+        os.makedirs(args.ckpt_root, exist_ok=True)
+
     os.makedirs(args.dump_root, exist_ok=True)
     os.makedirs(args.data_root, exist_ok=True)
 
     device = get_device(args)
     
-    print(f"\nGNP Experiment Runner:")
-    print(f"Mode: {args.mode}")
-    print(f"Problem: {args.problem}")
-    print(f"Device: {device}")
-    print(f"SuiteSparse path: {args.location}")
-    print(f"Dump root: {args.dump_root}")
-    print(f"Offline data root: {args.data_root}")
+    print(f"\nEXPERIMENT RUNNER")
+    print(f"\tMode: {args.mode}")
+    print(f"\tProblem: {args.problem}")
+    print(f"\tDevice: {device}")
+    print(f"\tSuiteSparse path: {args.location}")
+    print(f"\tDump path: {args.dump_root}")
+    print(f"\tData path: {args.data_root}")
     
-    plot_dir, run_id = setup_experiment(args)   
+    plot_dir, ckpt_dir, run_id = setup_experiment(args)
     A, A_csc, b, x_gt = load_problem(args, device)
     master_ckpt_path = args.checkpoint
-    
+
     if args.mode in ('train', 'both'):
-        print("\n\n\nTRAINING (GNP)")
+        print("\n\n\nTRAINING")
         print(f"{'='*60}")
-        master_ckpt_path = train_routine(A, b, x_gt, device, args, plot_dir, run_id)
+        master_ckpt_path = train_routine(A, b, x_gt, device, args, plot_dir, run_id, ckpt_dir=ckpt_dir)
     
     if args.mode in ('eval', 'both'):
         if master_ckpt_path is None:

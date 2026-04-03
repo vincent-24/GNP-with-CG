@@ -7,7 +7,6 @@ from GNP import config
 
 # Convention: M \approx inv(A)
 
-
 #-----------------------------------------------------------------------------
 # (Right-)Preconditioned generalized minimal residual method. Can use
 # flexible preconditioner. Current implementation supports only a
@@ -15,10 +14,7 @@ from GNP import config
 #
 # If timeout is not None, max_iters is disabled.
 class GMRES():
-
-    def solve(self, A, b, M=None, x0=None, restart=10, max_iters=100,
-              timeout=None, rtol=1e-8, progress_bar=True):
-
+    def solve(self, A, b, M=None, x0=None, restart=10, max_iters=100, timeout=None, rtol=1e-8, progress_bar=True):
         if progress_bar:
             if timeout is None:
                 pbar = tqdm(total=max_iters, desc='Solve')
@@ -31,6 +27,7 @@ class GMRES():
             x = torch.zeros_like(b)
         else:
             x = x0
+
         norm_b = torch.linalg.norm(b)
         hist_abs_res = []
         hist_rel_res = []
@@ -59,16 +56,18 @@ class GMRES():
 
         # Outer loop
         while 1:
-
             # Restart cycle
             V[:,0] = r / beta
             g[0] = beta
+
             for j in range(restart):
                 if M is not None:
                     Z[:,j] = M.apply(V[:,j])
                 else:
                     Z[:,j] = V[:,j]
+
                 w = A @ Z[:,j]
+
                 for k in range(j+1):
                     H[k,j] = torch.dot(V[:,k], w)
                     w = w - H[k,j] * V[:,k]
@@ -80,6 +79,7 @@ class GMRES():
                     w = w - h_corr * V[:,k]
 
                 H[j+1,j] = torch.linalg.norm(w)
+
                 if H[j+1,j] > 1e-15:
                     V[:,j+1] = w / H[j+1,j]
                 else:
@@ -90,11 +90,14 @@ class GMRES():
                     tmp      =  c[k] * H[k,j] + s[k] * H[k+1,j]
                     H[k+1,j] = -s[k] * H[k,j] + c[k] * H[k+1,j]
                     H[k,j] = tmp
+
                 t = torch.sqrt( H[j,j]**2 + H[j+1,j]**2 )
+
                 if t > 1e-15:
                     c[j], s[j] = H[j,j]/t, H[j+1,j]/t
                 else:
                     c[j], s[j] = 1.0, 0.0
+
                 H[j,j] = c[j] * H[j,j] + s[j] * H[j+1,j]
                 H[j+1,j] = 0
                 g[j+1] = -s[j] * g[j]
@@ -107,6 +110,7 @@ class GMRES():
                 hist_rel_res.append(rel_res.item())
                 hist_time.append(time.time() - tic)
                 iters = iters + 1
+
                 if (rel_res < rtol) or \
                    (timeout is None and iters == max_iters) or \
                    (timeout is not None and hist_time[-1] >= timeout):
@@ -118,19 +122,18 @@ class GMRES():
             # End restart cycle
 
             # Solve min || H * y - beta * e1 ||: obtain solution
-            y = torch.linalg.solve_triangular(H[:j+1, :j+1],
-                                              g[:j+1].view(j+1,1),
-                                              upper=True).view(j+1)
+            y = torch.linalg.solve_triangular(H[:j+1, :j+1], g[:j+1].view(j+1,1), upper=True).view(j+1)
             # End solve min || H * y - beta * e1 ||: obtain solution
 
             x = x + Z[:, :j+1] @ y
             r = b - A @ x
             beta = torch.linalg.norm(r)
-            if np.allclose(hist_abs_res[-1], beta.item()) is False:
+
+            if not np.allclose(hist_abs_res[-1], beta.item()):
                 warn('Residual tracked by least squares solve is different '
                      'from the true residual. The result of GMRES should not '
                      'be trusted.')
-            if quit_iter == True:
+            if quit_iter:
                 break
             else:
                 g = g.zero_()
@@ -142,49 +145,40 @@ class GMRES():
 
         # Compute Euclidean orthogonality of Arnoldi basis vectors (if enabled)
         ortho_map = None
+
         if config.TRACK_ORTHOGONALITY:
             # Extract only the active basis vectors from the final restart cycle
             V_active = V[:, :j+2].detach().cpu()  # j+2 because V has j+1 vectors (0 to j) plus one extra
             # Compute |V^T V| - should be identity matrix if perfectly orthogonal
             ortho_map = torch.abs(V_active.T @ V_active).numpy()
 
-        return x, iters, hist_abs_res, hist_rel_res, hist_time, ortho_map
-            
+        return x, iters, hist_abs_res, hist_rel_res, hist_time, ortho_map   
 
 #-----------------------------------------------------------------------------
 # Arnoldi process (m steps).
 class Arnoldi():
-
     def build(self, A, v0=None, m=100):
-
         n = A.shape[0]
+
         if v0 is None:
             v0 = torch.normal(0, 1, size=(n,), dtype=A.dtype).to(A.device)
+
         beta = torch.linalg.norm(v0)
-        
         V = torch.zeros(n, m+1, dtype=A.dtype).to(A.device)
         H = torch.zeros(m+1, m, dtype=A.dtype).to(A.device)
-
         V[:,0] = v0 / beta
+
         for j in range(m):
             w = A @ V[:,j]
+
             for k in range(j+1):
                 H[k,j] = torch.dot(V[:,k], w)
                 w = w - H[k,j] * V[:,k]
+
             H[j+1,j] = torch.linalg.norm(w)
             V[:,j+1] = w / H[j+1,j]
 
         Vm1 = V
         barHm = H
+
         return Vm1, barHm
-            
-
-#-----------------------------------------------------------------------------
-if __name__ == '__main__':
-
-    # Test Arnoldi
-    from GNP.problems import gen_1d_laplacian
-    A = gen_1d_laplacian(1000)
-    arnoldi = Arnoldi()
-    Vm1, barHm = arnoldi.build(A)
-    print( torch.linalg.norm( A @ Vm1[:,:-1] - Vm1 @ barHm ) )

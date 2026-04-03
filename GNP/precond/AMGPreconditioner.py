@@ -8,7 +8,6 @@ from pyamg.aggregation import smoothed_aggregation_solver
 
 from .base import CPUPreconditioner
 
-
 def _build_amg_solver(A, config, use_air_for_nonsymmetric: bool = True):
     """Build an AMG solver given matrix A and configuration.
 
@@ -64,7 +63,6 @@ def _build_amg_solver(A, config, use_air_for_nonsymmetric: bool = True):
                 keep=config['keep']
             )
 
-
 class AMGPreconditioner(CPUPreconditioner):
     """Algebraic Multigrid preconditioner using PyAMG.
 
@@ -77,7 +75,6 @@ class AMGPreconditioner(CPUPreconditioner):
         use_air_for_nonsymmetric: If True (default), use AIR solver for
             non-hermitian matrices. If False, use smoothed aggregation for all.
     """
-
     def __init__(self, A: torch.Tensor, use_air_for_nonsymmetric: bool = True):
         if A.layout != torch.sparse_csc:
             raise ValueError('AMGPreconditioner requires A to be sparse CSC')
@@ -103,7 +100,3 @@ class AMGPreconditioner(CPUPreconditioner):
     def _apply_numpy(self, r):
         """Apply AMG V-cycle."""
         return self.M * r
-
-
-# Backwards compatibility alias
-AMGPreconditioner_AIR = AMGPreconditioner

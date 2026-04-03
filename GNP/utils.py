@@ -4,7 +4,6 @@ import torch
 import numpy as np
 import scipy.io as sio
 from scipy import sparse
-from scipy.sparse.linalg import spsolve_triangular
 from ssgetpy import fetch
 from dataclasses import dataclass
 from typing import List, Optional
@@ -14,7 +13,6 @@ try:
     HAS_PYAMG = True
 except ImportError:
     HAS_PYAMG = False
-
 
 # -----------------------------------------------------------------------------
 # Multigrid Hierarchy for MG-GNN
@@ -28,7 +26,6 @@ class MultigridLevel:
     n_nodes: int                   # Number of nodes at this level
     R: Optional[torch.Tensor]      # Restriction operator to next coarser level (sparse)
     P: Optional[torch.Tensor]      # Prolongation operator from next coarser level (sparse)
-
 
 @dataclass
 class MultigridHierarchy:
@@ -50,7 +47,6 @@ class MultigridHierarchy:
         self.device = device
         return self
 
-
 def _scipy_to_torch_sparse(A_scipy, dtype=torch.float64, device='cpu'):
     """Convert scipy sparse matrix to torch sparse COO tensor."""
     A_coo = A_scipy.tocoo()
@@ -59,42 +55,31 @@ def _scipy_to_torch_sparse(A_scipy, dtype=torch.float64, device='cpu'):
     shape = torch.Size(A_coo.shape)
     return torch.sparse_coo_tensor(indices, values, shape, device=device).coalesce()
 
-
 def _torch_to_scipy_sparse(A_torch):
-    """Convert torch sparse tensor to scipy sparse CSR matrix.
-
-    Handles both COO and CSC layouts.
-    """
+    """Convert torch sparse tensor to scipy sparse CSR matrix. Handles both COO and CSC layouts."""
     A_cpu = A_torch.cpu()
 
     if A_cpu.layout == torch.sparse_csc:
-        # CSC tensor: use crow_indices (column pointers), col_indices -> row indices
         ccol_indices = A_cpu.ccol_indices().numpy()
         row_indices = A_cpu.row_indices().numpy()
         values = A_cpu.values().numpy()
         return sparse.csc_matrix((values, row_indices, ccol_indices), shape=A_cpu.shape).tocsr()
-
     elif A_cpu.layout == torch.sparse_csr:
-        # CSR tensor
         crow_indices = A_cpu.crow_indices().numpy()
         col_indices = A_cpu.col_indices().numpy()
         values = A_cpu.values().numpy()
         return sparse.csr_matrix((values, col_indices, crow_indices), shape=A_cpu.shape)
-
     else:
-        # COO tensor (default sparse layout)
         A_coo = A_cpu.coalesce()
         indices = A_coo.indices().numpy()
         values = A_coo.values().numpy()
         shape = A_coo.shape
         return sparse.coo_matrix((values, (indices[0], indices[1])), shape=shape).tocsr()
 
-
 def _extract_edge_index(A_sparse):
     """Extract edge_index (2, E) from sparse adjacency matrix for message passing."""
     if torch.is_tensor(A_sparse):
         A_cpu = A_sparse.cpu()
-        # Convert to COO for unified handling
         if A_cpu.layout == torch.sparse_csc:
             A_coo = A_cpu.to_sparse_coo().coalesce()
         elif A_cpu.layout == torch.sparse_csr:
@@ -105,7 +90,6 @@ def _extract_edge_index(A_sparse):
     else:
         A_coo = A_sparse.tocoo()
         return torch.from_numpy(np.vstack((A_coo.row, A_coo.col))).long()
-
 
 def _lloyd_aggregation(A_scipy, num_aggregates):
     """
@@ -146,7 +130,6 @@ def _lloyd_aggregation(A_scipy, num_aggregates):
     R = sparse.diags(1.0 / row_sums) @ R
 
     return R
-
 
 def build_multigrid_hierarchy(
     A,
@@ -251,36 +234,6 @@ def build_multigrid_hierarchy(
 
     return hierarchy
 
-
-def build_hierarchy_from_config(A, config, device):
-    """
-    Convenience function to build hierarchy using config parameters.
-
-    Args:
-        A: System matrix
-        config: Config module with NUM_LEVELS setting
-        device: Target device
-
-    Returns:
-        MultigridHierarchy
-    """
-    import math
-    n = A.shape[0]
-
-    # Auto-determine levels if not specified
-    num_levels = config.NUM_LEVELS
-    if num_levels is None:
-        num_levels = min(8, max(2, int(math.ceil(math.log2(n))) - 3))
-
-    return build_multigrid_hierarchy(
-        A=A,
-        num_levels=num_levels,
-        coarsening_ratio=0.5,
-        min_nodes=max(10, n // (2 ** num_levels)),
-        device=device
-    )
-
-
 #-----------------------------------------------------------------------------
 # Load problem of SuiteSparse.
 # problem must be in the form group/name.
@@ -324,27 +277,21 @@ def load_suitesparse(location, problem, device):
                 ) from exc
     else:
         raise Exception(f'Unsupported problem {problem}!')
-
-    
+ 
 #-----------------------------------------------------------------------------
 # Scale A by an estimated spectral radius according to the Gershgorin
 # circle theorem.
 def scale_A_by_spectral_radius(A):
-
     if A.layout == torch.sparse_csc:
-
         absA = torch.absolute(A)
         m, n = absA.shape
         row_sum = absA @ torch.ones(n, 1, dtype=A.dtype, device=A.device)
         col_sum = torch.ones(1, m, dtype=A.dtype, device=A.device) @ absA
         gamma = torch.min(torch.max(row_sum), torch.max(col_sum))
         outA = A * (1. / gamma.item())
-
     elif A.layout == torch.sparse_coo:
-        # Handle COO sparse tensors (used by MGGNN hierarchy)
         A_coo = A.coalesce()
         m, n = A_coo.shape
-        # Convert to CSR-like format for efficient row/col sums
         absA = torch.sparse_coo_tensor(
             A_coo.indices(),
             torch.abs(A_coo.values()),
@@ -362,122 +309,32 @@ def scale_A_by_spectral_radius(A):
             device=A_coo.device,
             dtype=A_coo.dtype
         ).coalesce()
-
     elif A.layout == torch.strided:
-
         absA = torch.absolute(A)
         row_sum = torch.sum(absA, dim=1)
         col_sum = torch.sum(absA, dim=0)
         gamma = torch.min(torch.max(row_sum), torch.max(col_sum))
         outA = A / gamma
-
     else:
-
-        raise NotImplementedError(
-            'A must be either torch.sparse_csc_tensor, torch.sparse_coo_tensor, or torch.tensor')
+        raise NotImplementedError('A must be either torch.sparse_csc_tensor, torch.sparse_coo_tensor, or torch.tensor')
     
     return outA
-
 
 #-----------------------------------------------------------------------------
 # Extract the diagonal of A.
 def extract_diagonal(A):
-
     if A.layout == torch.sparse_csc:
-
         n = A.shape[0]
         D = torch.zeros(n, device=A.device, dtype=A.dtype)
         A = A.to_sparse_coo().coalesce()
-
         indices = A.indices()
         mask = indices[0] == indices[1]
         diagonal_values = A.values()[mask]
         diagonal_indices = indices[0][mask]
-
         D = D.scatter_add(dim=0, index=diagonal_indices, src=diagonal_values)
-    
     elif A.layout == torch.strided:
-        
         D = torch.diagonal(A)
-        
     else:
-        
-        raise NotImplementedError(
-            'A must be either torch.sparse_csc_tensor or torch.tensor')
+        raise NotImplementedError('A must be either torch.sparse_csc_tensor or torch.tensor')
     
     return D
-
-
-#-----------------------------------------------------------------------------
-# Extract the block diagonal of A.
-# Assume A is torch.sparse_csc, on device.
-# The returned D is scipy.sparse.csc_array, on cpu.
-def extract_block_diagonal(A, block_size):
-
-    if A.layout != torch.sparse_csc:
-        raise Exception('To use BlockJacobi, A must be sparse csc')
-
-    n = A.shape[0]
-    A = A.to_sparse_coo().coalesce().to('cpu')
-
-    indices = A.indices()
-    mask = (indices[0] // block_size) == (indices[1] // block_size)
-    D_values = A.values()[mask]
-    D_indices = indices[:, mask]
-    
-    D = sparse.coo_array((D_values.numpy(),
-                          (D_indices[0].numpy(),
-                           D_indices[1].numpy())), shape=(n,n))
-    
-    D = D.tocsc()
-    
-    return D
-
-
-#-----------------------------------------------------------------------------
-# Replacement of scipy.sparse.linalg.SuperLU.solve().
-# Adapted from https://stackoverflow.com/questions/29620809/pickling-scipys-superlu-class-for-incomplete-lu-factorization
-def spsolve_lu(L, U, b, perm_c=None, perm_r=None):
-    """ an attempt to use SuperLU data to efficiently solve
-    Ax = Pr.T L U Pc.T x = b
-     - note that L from SuperLU is in CSC format solving for c
-       results in an efficiency warning
-    Pr . A . Pc = L . U
-    Lc = b      - forward solve for c
-     c = Ux     - then back solve for x
-    """
-    if perm_r is not None:
-        bb = b.copy()
-        bb[perm_r] = b
-    c = spsolve_triangular(L, bb, lower=True, unit_diagonal=True)
-    x = spsolve_triangular(U, c, lower=False)
-    if perm_c is None:
-        return x
-    else:
-        return x[perm_c]
-
-
-#-----------------------------------------------------------------------------
-if __name__ == '__main__':
-
-    # Test spsolve_lu()
-    n = 6
-    density = 0.25
-    A = sparse.random(n, n, density=density)
-    A.setdiag(1)
-    A = A.tocsc()
-    x = np.random.random(n)
-    b = A @ x
-    
-    B = sparse.linalg.spilu(A)
-    x1 = B.solve(b)
-    x2 = spsolve_lu(B.L, B.U, b, B.perm_c, B.perm_r)
-    x3 = spsolve_lu(B.L.tocsr(), B.U.tocsr(), b, B.perm_c, B.perm_r)
-
-    print(A.todense())
-    print(B.L.todense())
-    print(B.U.todense())
-    print(x)
-    print(x1)
-    print(x2)
-    print(x3)

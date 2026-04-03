@@ -11,12 +11,7 @@ dist/
 *.pt
 *.pth
 
-dump/*
-!dump/02-04-2026
-!dump/02-17-2026
-data/*
-logs/
-temp/
+.env
 
 .vscode/
 .idea/
@@ -28,22 +23,8 @@ temp/
 
 .ipynb_checkpoints/
 
-scripts/benchmark*
-scripts/overfit_diagnostic.py
+*.sh
 
-Miniconda3-latest-Linux-x86_64.sh
-Miniforge3-Linux-aarch64.sh
-run_*.sh
-
-reviews/
-agent_docs/
+.claude/
+CLAUDE.md
 tests/
-SBATCH_ARCHITECTURE.md
-MGGNN_Analysis.md
-results.txt
-
-GNP/nn/FNO.py
-GNP/solver/DeflatedCG.py
-scripts/pretrain_mggnn.py
-
-overfit_diagnostic.png
