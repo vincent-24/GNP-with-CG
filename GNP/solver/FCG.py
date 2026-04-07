@@ -6,13 +6,17 @@ from tqdm import tqdm
 from .base import IterativeSolver
 from GNP import config
 
-def _scalar(v):
-    """Extract a Python float from a torch scalar or plain number."""
-    return v.item() if torch.is_tensor(v) else v
+class FCG(IterativeSolver):
+    """Flexible Conjugate Gradient solver (Polak-Ribière variant).
 
-class PCG(IterativeSolver):
+    Handles variable (iteration-dependent) SPD preconditioners correctly.
+    Reduces to standard PCG when the preconditioner is constant.
+
+    Reference: Notay (2000), "Flexible Conjugate Gradients",
+               SIAM J. Sci. Comput. 22(4), 1444-1460.
+    """
     def solve(self, A, b, M=None, x0=None, max_iters=100, rtol=1e-8, progress_bar=True, return_trajectory=False):
-        x, norm_b, hists, tic, progress_bar = self._prepare_solve(b, x0, max_iters, 'PCG Solve', progress_bar)
+        x, norm_b, hists, tic, progress_bar = self._prepare_solve(b, x0, max_iters, 'FCG Solve', progress_bar)
         hist_abs, hist_rel, hist_energy, hist_time = hists
         history_x = []
 
@@ -23,6 +27,7 @@ class PCG(IterativeSolver):
             diag = PCGDiagnostics(config.PCG_DIAGNOSTICS)
             diag.max_iters = max_iters
             diag.rtol = rtol
+
             if M is not None and hasattr(M, '_set_diagnostics'):
                 M._set_diagnostics(diag)
 
@@ -30,6 +35,7 @@ class PCG(IterativeSolver):
         r = b - A @ x
         d = self._apply_M(M, r)
         delta_new = torch.dot(r, d)
+        r_old = r.clone()
         abs_res, rel_res = self._update_history(r, norm_b, tic, hists)
 
         if return_trajectory:
@@ -38,7 +44,8 @@ class PCG(IterativeSolver):
         while iters < max_iters:
             if rel_res < rtol:
                 if diag: 
-                    diag.set_termination('converged', iters, _scalar(rel_res))
+                    diag.set_termination('converged')
+
                 break
 
             self._record_direction(d)
@@ -47,12 +54,8 @@ class PCG(IterativeSolver):
 
             if abs(dAq) <= 1e-15:
                 if diag: 
-                    diag.set_termination('breakdown_dAq', iters, _scalar(rel_res))
-                if diag and diag.level >= 2:
-                    diag.record_iteration(
-                        iters + 1, float('nan'), float('nan'),
-                        delta_new.item(), float('nan'), dAq.item(),
-                        _scalar(abs_res), _scalar(rel_res), _scalar(abs_res))
+                    diag.set_termination('breakdown_dAq')
+
                 break
 
             alpha = delta_new / dAq
@@ -64,20 +67,24 @@ class PCG(IterativeSolver):
             if return_trajectory:
                 history_x.append(x.detach().clone())
 
-            prev_abs = _scalar(abs_res)
+            prev_abs = abs_res.item() if torch.is_tensor(abs_res) else abs_res
             abs_res, rel_res = self._update_history(r_true, norm_b, tic, hists)
 
             if rel_res < rtol:
                 iters += 1
-                if diag: 
-                    diag.set_termination('converged', iters, rel_res.item())
-                if diag and diag.level >= 2:
-                    diag.record_iteration(
-                        iters, alpha.item(), float('nan'),
-                        delta_new.item(), float('nan'), dAq.item(),
-                        abs_res.item(), rel_res.item(), prev_abs)
-                if progress_bar: 
+
+                if diag:
+                    diag.set_termination('converged')
+
+                    if diag.level >= 2:
+                        diag.record_iteration(
+                            iters, alpha.item(), 0.0,
+                            delta_new.item(), 0.0, dAq.item(),
+                            abs_res.item(), rel_res.item(), prev_abs)
+
+                if progress_bar:
                     progress_bar.update()
+
                 break
 
             s = self._apply_M(M, r)
@@ -86,15 +93,13 @@ class PCG(IterativeSolver):
 
             if abs(delta_old) <= 1e-15:
                 if diag: 
-                    diag.set_termination('breakdown_delta', iters, _scalar(rel_res))
-                if diag and diag.level >= 2:
-                    diag.record_iteration(
-                        iters + 1, alpha.item(), float('nan'),
-                        delta_new.item(), delta_old.item(), dAq.item(),
-                        _scalar(abs_res), _scalar(rel_res), prev_abs)
+                    diag.set_termination('breakdown_delta')
+                    
                 break
 
-            beta = delta_new / delta_old
+            # Polak-Ribière beta: correct for variable preconditioners
+            beta = torch.dot(s, r - r_old) / delta_old
+            r_old = r.clone()
             d = s + beta * d
             iters += 1
 
@@ -102,17 +107,20 @@ class PCG(IterativeSolver):
                 diag.record_iteration(
                     iters, alpha.item(), beta.item(),
                     delta_new.item(), delta_old.item(), dAq.item(),
-                    _scalar(abs_res), _scalar(rel_res), prev_abs)
+                    abs_res.item() if torch.is_tensor(abs_res) else abs_res,
+                    rel_res.item() if torch.is_tensor(rel_res) else rel_res,
+                    prev_abs)
 
-            if progress_bar: 
+            if progress_bar:
                 progress_bar.update()
 
         if diag and diag.termination_reason is None:
-            diag.set_termination('max_iters', iters, _scalar(rel_res))
+            diag.set_termination('max_iters')
 
-        if progress_bar: 
+        if progress_bar:
             progress_bar.close()
-        if diag: 
+
+        if diag:
             diag.print_summary()
 
         self._last_diagnostics = diag

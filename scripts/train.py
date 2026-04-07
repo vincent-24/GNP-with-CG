@@ -87,8 +87,11 @@ def _base_train_config(run_id, args, device, network_class):
 # ---------------------------------------------------------------------------
 
 def _train_spectral(gnp, optimizer, args, plot_dir, run_id, ckpt_path, cfg_path, device, network_class):
-    """Unsupervised training: minimise spectral radius rho(I - M^{-1}A)."""
+    """Unsupervised training: minimise a spectral loss (rho or kappa)."""
+    loss_type = getattr(config, 'SPECTRAL_LOSS_TYPE', 'rho')
+
     print(f"\nSPECTRAL TRAINING")
+    print(f"\tLoss type: {loss_type}")
     print(f"\tProbe vectors: {config.SPECTRAL_NUM_VECTORS}")
     print(f"\tPower iterations: {config.SPECTRAL_POWER_ITERS}")
     print(f"\tSteps per epoch: {config.SPECTRAL_STEPS_PER_EPOCH}")
@@ -108,28 +111,30 @@ def _train_spectral(gnp, optimizer, args, plot_dir, run_id, ckpt_path, cfg_path,
     train_cfg = _base_train_config(run_id, args, device, network_class)
     train_cfg['nn_training'] = {
         'mode': 'spectral',
+        'loss_type': loss_type,
         'epochs': config.EPOCHS,
         'learning_rate': config.LEARNING_RATE,
         'spectral_num_vectors': config.SPECTRAL_NUM_VECTORS,
         'spectral_power_iters': config.SPECTRAL_POWER_ITERS,
         'spectral_steps_per_epoch': config.SPECTRAL_STEPS_PER_EPOCH,
-        'best_spectral_radius': best_loss,
+        'best_loss': best_loss,
         'best_epoch': best_epoch,
-        'final_spectral_radius': hist_train_loss[-1] if hist_train_loss else None,
+        'final_loss': hist_train_loss[-1] if hist_train_loss else None,
     }
     train_cfg['checkpoint_path'] = ckpt_path
 
     with open(cfg_path, 'w') as f:
         json.dump(train_cfg, f, indent=2)
 
+    ylabel = 'log κ(M⁻¹A)' if loss_type == 'kappa' else 'ρ(I - M⁻¹A)'
     plot_learning_curve(
         hist_train_loss, hist_train_loss, args, plot_dir, run_id,
-        best_epoch=best_epoch, ylabel='Spectral Radius rho(I - M^{-1}A)',
+        best_epoch=best_epoch, ylabel=ylabel,
     )
 
     print(f"\n{'='*60}")
     print(f"Spectral Training Complete")
-    print(f"\tBest Spectral Radius: {best_loss:.6f} (epoch {best_epoch})")
+    print(f"\tBest {ylabel}: {best_loss:.6f} (epoch {best_epoch})")
     print(f"\tCheckpoint: {ckpt_path}")
     print(f"{'='*60}")
 

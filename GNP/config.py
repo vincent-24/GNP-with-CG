@@ -16,15 +16,14 @@ WORK_ROOT = os.getenv('WORK_ROOT', '../tests/')
 DATA_ROOT = os.getenv('DATA_PATH', os.path.join(WORK_ROOT, 'data'))
 DEFAULT_DUMP_PATH = os.getenv('DUMP_PATH', os.path.join(WORK_ROOT, 'dump'))
 SUITE_SPARSE_PATH = os.getenv('SUITESPARSE_PATH', os.path.join(DATA_ROOT, 'SuiteSparse'))
-CHECKPOINT_PATH = os.getenv('CHECKPOINT_PATH', os.path.join(WORK_ROOT, 'checkpoints'))
 
 PROBLEM_PATH = None
 
 # ============================NEURAL NETWORK ARCHITECTURE============================
 NETWORK_OVERRIDE = 'TwoLevelMGGNN'
 NUM_LAYERS = 8
-EMBED_DIM = 16
-HIDDEN_DIM = 32
+EMBED_DIM = 64
+HIDDEN_DIM = 64
 DROP_RATE = 0.0
 
 # Multigrid hierarchy
@@ -32,23 +31,25 @@ NUM_LEVELS = None          # None = auto (min(8, ceil(log2(n))))
 CROSS_LEVEL_WIDTH = 128    # Paper: 2 FC layers of size 128 for inter-level MLPs
 
 # TwoLevelMGGNN-specific (paper-faithful parallel cross-scale architecture)
-TWO_LEVEL_NUM_STEPS = 4            # Number of implicit correction steps
-TWO_LEVEL_FINE_K = 3               # TAGConv polynomial order for fine level
-TWO_LEVEL_COARSE_K = 5             # TAGConv polynomial order for coarse level
+TWO_LEVEL_NUM_STEPS = 6            # Number of implicit correction steps
+TWO_LEVEL_FINE_K = 5               # TAGConv polynomial order for fine level
+TWO_LEVEL_COARSE_K = 7             # TAGConv polynomial order for coarse level
 TWO_LEVEL_SHARE_BLOCKS = False     # Share block weights across steps (True = fewer params)
-TWO_LEVEL_CROSS_WIDTH = 128        # Hidden dim for cross-level MLPs 
+TWO_LEVEL_CROSS_WIDTH = 128        # Hidden dim for cross-level MLPs
+SPD_JACOBI_EPS = 1e-6              # Jacobi floor for SPD enforcement: M^{-1}(r) = N^{T}N(r) + \epsilon D^{-1}r
 
 BATCH_SIZE = 16
-EPOCHS = 100
+EPOCHS = 5
 LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-4                # Adam weight decay regularization
+WEIGHT_DECAY = 0.0                # Adam weight decay regularization
 TRAIN_VAL_SPLIT = 0.9             
-GRAD_CLIP_NORM = 1.0               # Maximum gradient norm for clipping
+GRAD_CLIP_NORM = 5.0               # Maximum gradient norm for clipping
 
-# Spectral radius loss (unsupervised training)
-SPECTRAL_NUM_VECTORS = 32      # Random probe vectors per optimizer step
-SPECTRAL_POWER_ITERS = 10      # Power iteration depth for rho estimation
-SPECTRAL_STEPS_PER_EPOCH = 50  # Optimizer steps per epoch (no DataLoader)
+# Spectral loss (unsupervised training)
+SPECTRAL_LOSS_TYPE = 'kappa'       # 'rho' = ρ(I-M⁻¹A) (Richardson rate), 'kappa' = log κ(M⁻¹A) (CG rate)
+SPECTRAL_NUM_VECTORS = 64      # Random probe vectors per optimizer step
+SPECTRAL_POWER_ITERS = 20      # Power iteration depth for rho estimation
+SPECTRAL_STEPS_PER_EPOCH = 100  # Optimizer steps per epoch (no DataLoader)
 
 # ===============================DATASET & HARVESTING================================
 TRAIN_OFFLINE = False  # True = supervised (harvested PCG dataset), False = spectral (rho minimization)
@@ -78,6 +79,9 @@ BASELINE_SOLVER = 'PCG' # 'PCG' for SPD matrices, 'FGMRES' for non-symmetric
 TRACK_ORTHOGONALITY = True
 ORTHOGONALITY_SAMPLE_RATE = 1
 X_GROUND_TRUTH = 'random'   # Options: 'random', 'ones', 'ramp', 'sine', 'alternating'
+
+PCG_DIAGNOSTICS = 3            # 0=off, 1=termination reason, 2=+per-iter scalars, 3=+preconditioner internals
+PCG_DIAG_SYMMETRY_PERIOD = 10  # Symmetry probe every N iters (level 3 only)
 
 # =====================ADVANCED CONFIGURATIONS (DICTS & LISTS)=====================
 SOLVER_CONFIG = {

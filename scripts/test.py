@@ -78,9 +78,17 @@ def eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path=Non
                 'final_res': final_res.item(),
                 'iters': iters,
             }
-            
+
             print(f"  Iterations: {results[name]['iters']}")
             print(f"  Final residual: {final_res:.2e}")
+
+            if config.PCG_DIAGNOSTICS >= 1 and hasattr(solver, '_last_diagnostics') and solver._last_diagnostics is not None:
+                diag = solver._last_diagnostics
+                results[name]['diagnostics'] = diag.summary_dict()
+                safe_name = name.replace(' ', '_').replace('(', '').replace(')', '')
+                diag_path = os.path.join(plot_dir, f'diag_{safe_name}.txt')
+                diag.write_log(diag_path)
+                print(f"  Diagnostics: {diag.termination_reason} (log: {diag_path})")
             
         except Exception as e:
             print(f"  ERROR: {e}")
@@ -95,16 +103,24 @@ def eval_routine(A, A_csc, b, x_gt, device, args, plot_dir, master_ckpt_path=Non
     
     plot_results(results, args, plot_dir, run_id)
     
-    print(f"\n{'='*60}")
-    print(f"{'Experiment':<30} {'Iters':>8} {'Final Res':>12}")
-    print(f"{'='*60}")
+    has_diag = config.PCG_DIAGNOSTICS >= 1
+    print(f"\n{'='*75}")
+    if has_diag:
+        print(f"{'Experiment':<30} {'Iters':>8} {'Final Res':>12} {'Termination':>20}")
+    else:
+        print(f"{'Experiment':<30} {'Iters':>8} {'Final Res':>12}")
+    print(f"{'='*75}")
 
     for name, res in results.items():
         if 'error' in res:
             print(f"{name:<30} {'ERROR':>8} {res['error'][:12]:>12}")
         else:
-            print(f"{name:<30} {res['iters']:>8} {res['final_res']:>12.2e}")
-            
-    print(f"{'='*60}")
+            term = res.get('diagnostics', {}).get('termination', '') if has_diag else ''
+            if has_diag:
+                print(f"{name:<30} {res['iters']:>8} {res['final_res']:>12.2e} {term:>20}")
+            else:
+                print(f"{name:<30} {res['iters']:>8} {res['final_res']:>12.2e}")
+
+    print(f"{'='*75}")
     
     return results

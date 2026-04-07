@@ -22,7 +22,11 @@ from GNP import config
 from GNP.factory import get_solver_info, get_network_class
 
 def get_timestamp_str():
-    return datetime.now().strftime("%m-%d-%Y")
+    date_str = datetime.now().strftime("%m-%d-%Y")
+    run_index = os.environ.get('GNP_RUN_INDEX')
+    if run_index is not None:
+        return f"{date_str}_{run_index}"
+    return date_str
 
 def get_month_str():
     return datetime.now().strftime("%m-%Y")

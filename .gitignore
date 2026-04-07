@@ -12,6 +12,7 @@ dist/
 *.pth
 
 .env
+tests/
 
 .vscode/
 .idea/
@@ -27,4 +28,4 @@ dist/
 
 .claude/
 CLAUDE.md
-tests/
+
