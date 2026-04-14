@@ -86,20 +86,33 @@ def _base_train_config(run_id, args, device, network_class):
 # Training modes
 # ---------------------------------------------------------------------------
 
+def _build_scheduler(optimizer):
+    """Build LR scheduler from config. Returns None if disabled."""
+    sched_type = getattr(config, 'LR_SCHEDULER', 'none')
+    if sched_type == 'cosine':
+        T_0 = getattr(config, 'LR_COSINE_T0', 5)
+        eta_min = getattr(config, 'LR_COSINE_ETA_MIN', 1e-5)
+        return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=T_0, eta_min=eta_min,
+        )
+    return None
+
 def _train_spectral(gnp, optimizer, args, plot_dir, run_id, ckpt_path, cfg_path, device, network_class):
-    """Unsupervised training: minimise a spectral loss (rho or kappa)."""
+    """Unsupervised training: minimise a spectral loss (rho, kappa, hutchinson, or curriculum)."""
     loss_type = getattr(config, 'SPECTRAL_LOSS_TYPE', 'rho')
+    scheduler = _build_scheduler(optimizer)
 
     print(f"\nSPECTRAL TRAINING")
     print(f"\tLoss type: {loss_type}")
     print(f"\tProbe vectors: {config.SPECTRAL_NUM_VECTORS}")
     print(f"\tPower iterations: {config.SPECTRAL_POWER_ITERS}")
     print(f"\tSteps per epoch: {config.SPECTRAL_STEPS_PER_EPOCH}")
+    print(f"\tLR scheduler: {getattr(config, 'LR_SCHEDULER', 'none')}")
 
     hist_train_loss, best_loss, best_epoch = gnp.train_spectral(
         epochs=config.EPOCHS,
         optimizer=optimizer,
-        scheduler=None,
+        scheduler=scheduler,
         checkpoint_path=ckpt_path,
         num_vectors=config.SPECTRAL_NUM_VECTORS,
         power_iters=config.SPECTRAL_POWER_ITERS,
@@ -114,6 +127,7 @@ def _train_spectral(gnp, optimizer, args, plot_dir, run_id, ckpt_path, cfg_path,
         'loss_type': loss_type,
         'epochs': config.EPOCHS,
         'learning_rate': config.LEARNING_RATE,
+        'lr_scheduler': getattr(config, 'LR_SCHEDULER', 'none'),
         'spectral_num_vectors': config.SPECTRAL_NUM_VECTORS,
         'spectral_power_iters': config.SPECTRAL_POWER_ITERS,
         'spectral_steps_per_epoch': config.SPECTRAL_STEPS_PER_EPOCH,
@@ -126,7 +140,9 @@ def _train_spectral(gnp, optimizer, args, plot_dir, run_id, ckpt_path, cfg_path,
     with open(cfg_path, 'w') as f:
         json.dump(train_cfg, f, indent=2)
 
-    ylabel = 'log κ(M⁻¹A)' if loss_type == 'kappa' else 'ρ(I - M⁻¹A)'
+    ylabel_map = {'kappa': 'log κ(M⁻¹A)', 'hutchinson': '||I-M⁻¹A||²_F',
+                  'curriculum': 'loss', 'rho': 'ρ(I - M⁻¹A)'}
+    ylabel = ylabel_map.get(loss_type, 'loss')
     plot_learning_curve(
         hist_train_loss, hist_train_loss, args, plot_dir, run_id,
         best_epoch=best_epoch, ylabel=ylabel,

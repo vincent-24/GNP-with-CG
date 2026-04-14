@@ -148,15 +148,18 @@ class GNP():
         """Train the preconditioner by minimising a spectral loss.
 
         Loss type is selected by ``config.SPECTRAL_LOSS_TYPE``:
-        - ``'rho'``:   minimise rho(I - M^{-1}A)    (Richardson convergence rate)
-        - ``'kappa'``: minimise log kappa(M^{-1}A)   (PCG convergence rate)
+        - ``'rho'``:        minimise rho(I - M^{-1}A)    (Richardson convergence rate)
+        - ``'kappa'``:      minimise log kappa(M^{-1}A)   (PCG convergence rate)
+        - ``'hutchinson'``: minimise ||I - M^{-1}A||_F^2  (160x cheaper, all-eigenvalue signal)
+        - ``'curriculum'``: hutchinson first, then warm-started kappa refinement
 
         Returns
             hist_train_loss : list[float]
             best_loss : float
             best_epoch : int
         """
-        from GNP.nn.losses import spectral_radius_loss, condition_number_loss
+        from GNP.nn.losses import (spectral_radius_loss, condition_number_loss,
+                                   hutchinson_frobenius_loss, condition_number_loss_warm)
 
         self._prepare_A_torch()
         hist_train_loss = []
@@ -164,15 +167,21 @@ class GNP():
         best_epoch = -1
 
         loss_type = getattr(config, 'SPECTRAL_LOSS_TYPE', 'rho')
-        use_kappa = loss_type == 'kappa'
         M_inv = self._scale_equivariant_forward
-        loss_fn = condition_number_loss if use_kappa else spectral_radius_loss
+
+        # Curriculum state: warm-start eigenvector buffers
+        _v_warm, _w_warm = None, None
+        total_steps = epochs * steps_per_epoch
+        switch_step = int(getattr(config, 'CURRICULUM_SWITCH_FRAC', 0.8) * total_steps)
+        warm_power_iters = getattr(config, 'CURRICULUM_WARM_POWER_ITERS', 3)
+        warm_num_vectors = getattr(config, 'CURRICULUM_WARM_NUM_VECTORS', 16)
 
         print(f"Starting spectral training: {epochs} epochs, "
               f"{steps_per_epoch} steps/epoch, "
               f"{num_vectors} vectors, {power_iters} power iters, "
               f"loss={loss_type}")
 
+        global_step = 0
         for epoch in range(epochs):
             self.net.train()
             epoch_losses = []
@@ -180,21 +189,51 @@ class GNP():
 
             for step in pbar:
                 optimizer.zero_grad()
-                loss = loss_fn(self.A_torch, M_inv, self.n, num_vectors=num_vectors, power_iters=power_iters)
 
-                if use_kappa:
+                # --- Select loss function based on type and curriculum phase ---
+                if loss_type == 'hutchinson':
+                    loss = hutchinson_frobenius_loss(self.A_torch, M_inv, self.n, num_vectors=num_vectors)
+                    pbar.set_postfix({'||I-M⁻¹A||²': f'{loss.item():.4f}'})
+
+                elif loss_type == 'curriculum':
+                    if global_step < switch_step:
+                        # Phase 1: cheap Hutchinson
+                        loss = hutchinson_frobenius_loss(self.A_torch, M_inv, self.n, num_vectors=num_vectors)
+                        pbar.set_postfix({'hutch': f'{loss.item():.4f}', 'phase': 'H'})
+                    else:
+                        # Phase 2: warm-started kappa refinement
+                        loss, _v_warm, _w_warm = condition_number_loss_warm(
+                            self.A_torch, M_inv, self.n,
+                            num_vectors=warm_num_vectors,
+                            power_iters=warm_power_iters,
+                            v_init=_v_warm, w_init=_w_warm,
+                        )
+                        kval = math.exp(loss.item())
+                        pbar.set_postfix({
+                            'log(κ)': f'{loss.item():.2f}',
+                            'κ': f'{kval:.1f}' if kval < 1e4 else f'{kval:.2e}',
+                            'phase': 'K',
+                        })
+
+                elif loss_type == 'kappa':
+                    loss = condition_number_loss(self.A_torch, M_inv, self.n,
+                                                num_vectors=num_vectors, power_iters=power_iters)
                     kval = math.exp(loss.item())
                     pbar.set_postfix({
                         'log(κ)': f'{loss.item():.2f}',
                         'κ': f'{kval:.1f}' if kval < 1e4 else f'{kval:.2e}',
                     })
-                else:
+
+                else:  # 'rho'
+                    loss = spectral_radius_loss(self.A_torch, M_inv, self.n,
+                                               num_vectors=num_vectors, power_iters=power_iters)
                     pbar.set_postfix({'rho': f'{loss.item():.4f}'})
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=config.GRAD_CLIP_NORM)
                 optimizer.step()
                 epoch_losses.append(loss.item())
+                global_step += 1
 
             if scheduler is not None:
                 scheduler.step()
@@ -212,22 +251,16 @@ class GNP():
 
             status = " (saved)" if improved else ""
 
-            if use_kappa:
-                kval = math.exp(avg_loss)
+            if loss_type in ('kappa', 'curriculum'):
+                kval = math.exp(avg_loss) if avg_loss < 50 else float('inf')
                 kstr = f'{kval:.1f}' if kval < 1e4 else f'{kval:.2e}'
                 print(f"Epoch {epoch+1:3d}/{epochs} | "
-                      f"log(κ): {avg_loss:.4f} | κ ≈ {kstr}{status}")
+                      f"loss: {avg_loss:.4f} | κ ≈ {kstr}{status}")
             else:
                 print(f"Epoch {epoch+1:3d}/{epochs} | "
-                      f"rho: {avg_loss:.6f}{status}")
+                      f"loss: {avg_loss:.6f}{status}")
 
-        if use_kappa:
-            kval = math.exp(best_loss)
-            kstr = f'{kval:.1f}' if kval < 1e4 else f'{kval:.2e}'
-            print(f"\nBest log(κ): {best_loss:.4f} (κ ≈ {kstr}) "
-                  f"at epoch {best_epoch}")
-        else:
-            print(f"\nBest spectral radius: {best_loss:.6f} at epoch {best_epoch}")
+        print(f"\nBest loss: {best_loss:.6f} at epoch {best_epoch}")
 
         # --- Post-training diagnostic report ---
         self._log_training_diagnostics(optimizer, num_vectors, power_iters, best_loss, best_epoch, epochs)

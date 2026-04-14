@@ -39,17 +39,31 @@ TWO_LEVEL_CROSS_WIDTH = 128        # Hidden dim for cross-level MLPs
 SPD_JACOBI_EPS = 1e-6              # Jacobi floor for SPD enforcement: M^{-1}(r) = N^{T}N(r) + \epsilon D^{-1}r
 
 BATCH_SIZE = 16
-EPOCHS = 5
+EPOCHS = 50                       # Hutchinson loss is 160x cheaper per step → can afford 10x more epochs
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 0.0                # Adam weight decay regularization
 TRAIN_VAL_SPLIT = 0.9             
 GRAD_CLIP_NORM = 5.0               # Maximum gradient norm for clipping
 
 # Spectral loss (unsupervised training)
-SPECTRAL_LOSS_TYPE = 'kappa'       # 'rho' = ρ(I-M⁻¹A) (Richardson rate), 'kappa' = log κ(M⁻¹A) (CG rate)
-SPECTRAL_NUM_VECTORS = 64      # Random probe vectors per optimizer step
-SPECTRAL_POWER_ITERS = 20      # Power iteration depth for rho estimation
+# Loss types: 'rho'        = ρ(I-M⁻¹A) via power iteration
+#              'kappa'      = log κ(M⁻¹A) via two-phase power iteration
+#              'hutchinson' = ||I - M⁻¹A||²_F via Hutchinson trace estimator (160x cheaper)
+#              'curriculum' = hutchinson first, then warm-started kappa refinement
+SPECTRAL_LOSS_TYPE = 'hutchinson'
+SPECTRAL_NUM_VECTORS = 16      # Probe vectors per step (16 for hutchinson, 64 for kappa)
+SPECTRAL_POWER_ITERS = 20      # Power iteration depth (only used by rho/kappa)
 SPECTRAL_STEPS_PER_EPOCH = 100  # Optimizer steps per epoch (no DataLoader)
+
+# Curriculum schedule (only used when SPECTRAL_LOSS_TYPE = 'curriculum')
+CURRICULUM_SWITCH_FRAC = 0.8    # Fraction of total steps using hutchinson before switching to warm kappa
+CURRICULUM_WARM_POWER_ITERS = 3 # Power iterations for warm-started kappa phase
+CURRICULUM_WARM_NUM_VECTORS = 16 # Probe vectors for warm-started kappa phase
+
+# Learning rate scheduler
+LR_SCHEDULER = 'cosine'        # 'none', 'cosine' (CosineAnnealingWarmRestarts)
+LR_COSINE_T0 = 5               # Restart period in epochs for cosine scheduler
+LR_COSINE_ETA_MIN = 1e-5       # Minimum learning rate
 
 # ===============================DATASET & HARVESTING================================
 TRAIN_OFFLINE = False  # True = supervised (harvested PCG dataset), False = spectral (rho minimization)
